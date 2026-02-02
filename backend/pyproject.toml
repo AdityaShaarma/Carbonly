@@ -1,0 +1,33 @@
+[project]
+name = "carbonly-backend"
+version = "1.0.0"
+description = "Carbon accounting and emissions reporting platform"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".git", "__pycache__", "alembic/versions", "venv", ".venv"]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.isort]
+known-first-party = ["app"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | __pycache__
+    | alembic/versions
+    | venv
+    | \.venv
+)/
+'''
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
