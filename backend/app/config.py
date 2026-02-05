@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     @property
     def is_dev_mode(self) -> bool:
         """True if dev-only endpoints (dev-seed, dev-db-check) should be enabled."""
-        return self.debug or self.env == "local"
+        return self.env == "development"
 
 
 @lru_cache

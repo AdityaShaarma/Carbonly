@@ -104,6 +104,14 @@ async def get_dashboard(
         ai_estimated_sources_count=ai_estimated_count,
         manual_entries_count=manual_count,
     )
+    lineage = {
+        "measured_kg_co2e": sum(s.measured_kg_co2e for s in scope_totals),
+        "estimated_kg_co2e": sum(s.estimated_kg_co2e for s in scope_totals),
+        "manual_kg_co2e": sum(s.manual_kg_co2e for s in scope_totals),
+        "measured_count": connected_count,
+        "estimated_count": ai_estimated_count,
+        "manual_count": manual_count,
+    }
 
     # Monthly trend
     monthly_rows = await get_monthly_breakdown_by_scope(db, company.id, year)
@@ -145,6 +153,7 @@ async def get_dashboard(
         annual_totals=annual_totals_dict,
         data_quality=data_quality,
         monthly_trend=monthly_trend,
+        data_lineage=lineage,
     )
 
 

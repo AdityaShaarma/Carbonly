@@ -38,3 +38,4 @@ class DashboardResponse(BaseModel):
     annual_totals: dict  # Mixed: total_co2e (Decimal), scope_1/2/3 (Decimal), scope_totals (list[ScopeTotal]), scope3_by_category (list[Scope3CategoryTotal])
     data_quality: DataQualityStats
     monthly_trend: list[MonthlyTrendPoint]
+    data_lineage: dict | None = None  # measured/estimated/manual totals (kg) + counts

@@ -1,6 +1,7 @@
 """Company model."""
 import uuid
 from sqlalchemy import String, Integer, Boolean, ForeignKey
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 from app.models.base import UUIDMixin, TimestampMixin
@@ -17,6 +18,7 @@ class Company(Base, UUIDMixin, TimestampMixin):
     email_notifications: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     monthly_summary_reports: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     unit_system: Mapped[str] = mapped_column(String(32), default="metric_tco2e", nullable=False)
+    onboarding_state: Mapped[dict | None] = mapped_column("onboarding_state", JSONB, nullable=True)
 
     users: Mapped[list["User"]] = relationship("User", back_populates="company")
     data_source_connections: Mapped[list["DataSourceConnection"]] = relationship(

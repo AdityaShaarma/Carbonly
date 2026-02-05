@@ -7,6 +7,7 @@ import asyncio
 import os
 import sys
 from decimal import Decimal
+from datetime import date
 from uuid import uuid4
 
 # Ensure app is importable
@@ -18,8 +19,10 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from app.auth import get_password_hash
 from app.config import get_settings
 from app.models.company import Company
+from app.models.activity_record import ActivityRecord
 from app.models.emission_factor import EmissionFactor
 from app.models.user import User
+from app.services.emissions import compute_estimates_for_company, refresh_emissions_summaries
 
 
 async def seed():
@@ -73,6 +76,12 @@ async def seed():
             email_notifications=True,
             monthly_summary_reports=True,
             unit_system="metric_tco2e",
+            onboarding_state={
+                "connect_aws": False,
+                "upload_csv": False,
+                "add_manual_activity": False,
+                "create_report": False,
+            },
         )
         session.add(company)
         await session.flush()
@@ -85,8 +94,54 @@ async def seed():
             password_hash=get_password_hash("password123"),
         )
         session.add(user)
+        await session.flush()
+
+        # Seed activity records across multiple months for charts
+        year = 2025
+        for month in range(1, 13):
+            period_start = date(year, month, 1)
+            period_end = date(year, month, 28)
+            session.add(
+                ActivityRecord(
+                    id=uuid4(),
+                    company_id=company.id,
+                    data_source_connection_id=None,
+                    scope=3,
+                    scope_3_category="cloud",
+                    activity_type="cloud_compute_hours",
+                    quantity=Decimal("800") + Decimal(month * 10),
+                    unit="hours",
+                    period_start=period_start,
+                    period_end=period_end,
+                    data_quality="estimated",
+                    assumptions="Seeded demo data",
+                    confidence_score=Decimal("75.0"),
+                )
+            )
+            session.add(
+                ActivityRecord(
+                    id=uuid4(),
+                    company_id=company.id,
+                    data_source_connection_id=None,
+                    scope=3,
+                    scope_3_category="cloud",
+                    activity_type="cloud_storage_gb_months",
+                    quantity=Decimal("500") + Decimal(month * 5),
+                    unit="GB-months",
+                    period_start=period_start,
+                    period_end=period_end,
+                    data_quality="estimated",
+                    assumptions="Seeded demo data",
+                    confidence_score=Decimal("75.0"),
+                )
+            )
+        await session.flush()
+
+        # Compute estimates and summaries
+        await compute_estimates_for_company(session, company.id, replace_existing=True)
+        await refresh_emissions_summaries(session, company.id, year)
         await session.commit()
-        print("Seeded demo user: test@carbonly.com / password123")
+        print("Seeded demo user + monthly activity data: test@carbonly.com / password123")
 
 
 if __name__ == "__main__":
