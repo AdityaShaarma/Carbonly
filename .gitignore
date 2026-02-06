@@ -15,8 +15,6 @@ backend/app/schemas/__pycache__/
 backend/app/services/__pycache__/
 backend/.env
 backend/.env*
-backend/.env.example
 frontend/.env
 frontend/.env*
-frontend/.env.example
 .DS_Store
