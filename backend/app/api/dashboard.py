@@ -2,11 +2,12 @@
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Header
+from fastapi.responses import JSONResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import CurrentCompany, CurrentUser, DbSession
+from app.auth import CurrentCompany, CurrentUser, DbSession, NonDemoUser
 from app.models.activity_record import ActivityRecord
 from app.models.data_source_connection import DataSourceConnection
 from app.schemas.dashboard import (
@@ -23,6 +24,12 @@ from app.services.emissions import (
     get_annual_totals_by_scope,
     get_monthly_breakdown_by_scope,
 )
+from app.services.idempotency import (
+    get_idempotency_record,
+    payload_hash,
+    store_idempotency_record,
+)
+from app.services.audit import log_audit_action
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -161,13 +168,51 @@ async def get_dashboard(
 async def recompute_emissions(
     year: Annotated[int, Query(description="Reporting year")] = 2025,
     company: CurrentCompany = None,
+    user: NonDemoUser = None,
     db: DbSession = None,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
     """Recompute emissions estimates and summaries for the company and year."""
     from app.services.emissions import compute_estimates_for_company, refresh_emissions_summaries
 
+    endpoint = "POST /api/dashboard/recompute"
+    if idempotency_key:
+        existing = await get_idempotency_record(
+            db, company_id=company.id, endpoint=endpoint, key=idempotency_key
+        )
+        if existing:
+            expected_hash = payload_hash({"year": year})
+            if existing.request_hash and expected_hash and existing.request_hash != expected_hash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Idempotency key reused with different payload.",
+                )
+            return JSONResponse(content=existing.response_body, status_code=existing.response_status)
+
     count = await compute_estimates_for_company(db, company.id, replace_existing=True)
     summary_count = await refresh_emissions_summaries(db, company.id, year)
+    await log_audit_action(
+        db,
+        user_id=user.id,
+        company_id=company.id,
+        action="emissions_recomputed",
+        entity_type="company",
+        entity_id=company.id,
+    )
     await db.commit()
 
-    return {"estimates_created": count, "summaries_refreshed": summary_count}
+    response_payload = {"estimates_created": count, "summaries_refreshed": summary_count}
+    if idempotency_key:
+        await store_idempotency_record(
+            db,
+            company_id=company.id,
+            user_id=user.id,
+            endpoint=endpoint,
+            key=idempotency_key,
+            request_payload={"year": year},
+            response_body=response_payload,
+            response_status=status.HTTP_200_OK,
+        )
+        await db.commit()
+
+    return response_payload

@@ -18,6 +18,10 @@ from app.models import (
     EmissionEstimate,
     EmissionsSummary,
     Report,
+    AuditLog,
+    IdempotencyKey,
+    EmailVerificationToken,
+    PasswordResetToken,
 )
 
 config = context.config
@@ -27,7 +31,7 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 settings = get_settings()
 # Sync URL for offline (dialect only); online overwritten with async URL below
-sync_url = settings.database_url.replace("+asyncpg", "")
+sync_url = settings.database_url_async.replace("+asyncpg", "")
 config.set_main_option("sqlalchemy.url", sync_url)
 
 
@@ -53,7 +57,7 @@ def do_run_migrations(connection: Connection) -> None:
 async def run_async_migrations() -> None:
     """Run migrations in 'online' mode with async engine."""
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.database_url
+    configuration["sqlalchemy.url"] = settings.database_url_async
     connectable = async_engine_from_config(
         configuration,
         prefix="sqlalchemy.",

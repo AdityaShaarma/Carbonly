@@ -12,6 +12,10 @@ class CompanyResponse(BaseModel):
     email_notifications: bool
     monthly_summary_reports: bool
     unit_system: str
+    plan: str
+    billing_status: str
+    subscription_status: str
+    current_period_end: str | None
 
     class Config:
         from_attributes = True

@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from sqlalchemy import String, Integer, Numeric, ForeignKey
+from sqlalchemy import String, Integer, Numeric, ForeignKey, DateTime
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -28,6 +28,7 @@ class Report(Base, UUIDMixin, TimestampMixin):
     content_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     generated_at: Mapped[datetime | None] = mapped_column(nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     company: Mapped["Company"] = relationship("Company", back_populates="reports")
     created_by_user: Mapped["User"] = relationship(

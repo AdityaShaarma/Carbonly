@@ -2,6 +2,7 @@
 import logging
 import sys
 import time
+import asyncio
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -9,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import auth, company, dashboard, insights, integrations, reports, onboarding, methodology
+from app.api import auth, company, dashboard, insights, integrations, reports, onboarding, methodology, billing
 from app.config import get_settings
 
 settings = get_settings()
@@ -27,6 +28,9 @@ app = FastAPI(
     description="Carbon accounting and emissions reporting platform for B2B SaaS SMBs",
     version="1.0.0",
     debug=settings.debug,
+    docs_url="/docs" if (settings.enable_docs or settings.env != "production") else None,
+    redoc_url="/redoc" if (settings.enable_docs or settings.env != "production") else None,
+    openapi_url="/openapi.json" if (settings.enable_docs or settings.env != "production") else None,
 )
 
 @app.on_event("startup")
@@ -34,12 +38,19 @@ async def startup_check():
     if settings.env == "production":
         if not settings.database_url:
             raise RuntimeError("DATABASE_URL is required in production")
-        if not settings.secret_key or settings.secret_key.startswith("change-me-"):
+        if (
+            not settings.secret_key
+            or settings.secret_key.startswith("change-me-")
+            or len(settings.secret_key) < 32
+        ):
             raise RuntimeError("SECRET_KEY must be set to a secure value in production")
+        if "*" in settings.cors_origins_list:
+            raise RuntimeError("CORS_ORIGINS must be an explicit allowlist in production")
+    logger.info("CORS allowed origins: %s", settings.cors_origins_list)
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
-    request_id = uuid4().hex
+    request_id = getattr(request.state, "request_id", uuid4().hex)
     start_time = time.perf_counter()
     response = None
     try:
@@ -56,6 +67,27 @@ async def request_logging_middleware(request: Request, call_next):
             status_code,
             duration_ms,
         )
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-Id") or uuid4().hex
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = request_id
+    return response
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if settings.env == "production":
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 
 @app.exception_handler(Exception)
@@ -98,6 +130,7 @@ app.include_router(reports.router)
 app.include_router(insights.router)
 app.include_router(onboarding.router)
 app.include_router(methodology.router)
+app.include_router(billing.router)
 
 
 @app.get("/")
@@ -114,8 +147,10 @@ async def health():
     from app.database import engine
 
     try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
+        async def _ping():
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        await asyncio.wait_for(_ping(), timeout=2.0)
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         logger.exception("DB health check failed")
@@ -130,8 +165,10 @@ async def health_details():
     from app.database import engine
 
     try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
+        async def _ping():
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        await asyncio.wait_for(_ping(), timeout=2.0)
         return {
             "status": "healthy",
             "database": "connected",

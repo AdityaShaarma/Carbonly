@@ -11,6 +11,14 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { year } = useYearSelector();
+  // avoid trapping users; onboarding is a nudge, not a hard block.
+  const ALWAYS_ALLOWED = [
+    "/onboarding",
+    "/reports",
+    "/settings",
+    "/manual",
+    "/integrations",
+  ];
 
   const { data: onboarding } = useQuery("onboarding", fetchOnboarding);
   const { data: integrations } = useQuery("integrations", fetchIntegrations);
@@ -32,13 +40,18 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     !onboarding.completed &&
     !hasIntegrations &&
     !hasManual &&
-    !hasReports;
+    !hasReports &&
+    (location.pathname === "/dashboard" || location.pathname === "/");
+  const isAllowedRoute = ALWAYS_ALLOWED.some(
+    (path) =>
+      location.pathname === path || location.pathname.startsWith(`${path}/`)
+  );
 
   useEffect(() => {
-    if (shouldOnboard && location.pathname !== "/onboarding") {
+    if (shouldOnboard && !isAllowedRoute) {
       navigate("/onboarding", { replace: true });
     }
-  }, [shouldOnboard, location.pathname, navigate]);
+  }, [shouldOnboard, isAllowedRoute, navigate]);
 
   return <>{children}</>;
 }

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useMutation } from "react-query";
 import { z } from "zod";
-import { login } from "@/api/auth";
+import { demoLogin, login } from "@/api/auth";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -15,6 +15,8 @@ import {
   CardTitle,
 } from "@/components/ui/Card";
 import toast from "react-hot-toast";
+import { Link } from "react-router-dom";
+import { DEMO_MODE } from "@/config/env";
 
 const schema = z.object({
   email: z.string().email("Invalid email"),
@@ -41,6 +43,15 @@ export function LoginPage() {
     onError: (err: { response?: { data?: { detail?: string } } }) => {
       toast.error(err.response?.data?.detail ?? "Login failed");
     },
+  });
+
+  const demo = useMutation(() => demoLogin(), {
+    onSuccess: async () => {
+      await refetchMe();
+      toast.success("Demo mode enabled");
+      navigate(from, { replace: true });
+    },
+    onError: () => toast.error("Demo login failed"),
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -91,6 +102,27 @@ export function LoginPage() {
               Sign in
             </Button>
           </form>
+          <div className="mt-3 flex items-center justify-between text-sm">
+            <Link
+              to="/forgot-password"
+              className="text-primary hover:underline"
+            >
+              Forgot password?
+            </Link>
+            <Link to="/signup" className="text-primary hover:underline">
+              Create account
+            </Link>
+          </div>
+          {DEMO_MODE && (
+            <Button
+              className="mt-4 w-full"
+              variant="outline"
+              onClick={() => demo.mutate()}
+              isLoading={demo.isLoading}
+            >
+              Try Demo
+            </Button>
+          )}
           <p className="mt-4 text-center text-xs text-muted-foreground">
             Demo: test@carbonly.com / password123 (after seeding backend)
           </p>

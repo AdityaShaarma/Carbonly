@@ -23,6 +23,8 @@ class UserResponse(BaseModel):
     email: str
     full_name: str | None
     company_id: str
+    is_email_verified: bool
+    is_demo: bool
 
     class Config:
         from_attributes = True
@@ -51,6 +53,21 @@ class PasswordResetRequest(BaseModel):
 
 
 class PasswordResetConfirm(BaseModel):
-    email: EmailStr
     token: str
     new_password: str
+
+
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: str | None = None
+
+
+class SignupResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr | None = None

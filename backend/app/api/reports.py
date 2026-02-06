@@ -5,12 +5,13 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Header
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import CurrentCompany, CurrentUser, DbSession
+from app.auth import CurrentCompany, CurrentUser, DbSession, NonDemoUser, PaidCompany
 from app.models.report import Report
 from app.schemas.reports import (
     ReportCreateRequest,
@@ -18,12 +19,16 @@ from app.schemas.reports import (
     ReportListItem,
     ReportsListResponse,
 )
-from app.services.emissions import (
-    get_annual_totals_by_scope,
-    get_monthly_breakdown_by_scope,
-    refresh_emissions_summaries,
-)
+from app.services.emissions import refresh_emissions_summaries
+from app.services.report_service import build_report_snapshot
 from app.services.pdf_report import render_report_pdf
+from app.services.idempotency import (
+    get_idempotency_record,
+    payload_hash,
+    store_idempotency_record,
+)
+from app.services.audit import log_audit_action
+from app.models.base import utc_now
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -31,11 +36,14 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 @router.get("", response_model=ReportsListResponse)
 async def list_reports(
     year: Annotated[int | None, Query(description="Filter by reporting year")] = None,
-    company: CurrentCompany = None,
+    company: PaidCompany = None,
     db: DbSession = None,
 ):
     """List all reports for the company."""
-    q = select(Report).where(Report.company_id == company.id)
+    q = select(Report).where(
+        Report.company_id == company.id,
+        Report.deleted_at.is_(None),
+    )
     if year is not None:
         q = q.where(Report.reporting_year == year)
     q = q.order_by(Report.created_at.desc())
@@ -62,76 +70,37 @@ async def list_reports(
 @router.post("", response_model=ReportDetailResponse)
 async def create_report(
     request: ReportCreateRequest,
-    company: CurrentCompany = None,
-    user: CurrentUser = None,
+    company: PaidCompany = None,
+    user: NonDemoUser = None,
     db: DbSession = None,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
     """Create a new report (draft) for the reporting year. Triggers recompute and summary refresh."""
     from app.services.emissions import compute_estimates_for_company
+
+    endpoint = "POST /api/reports"
+    if idempotency_key:
+        existing = await get_idempotency_record(
+            db, company_id=company.id, endpoint=endpoint, key=idempotency_key
+        )
+        if existing:
+            expected_hash = payload_hash(request)
+            if existing.request_hash and expected_hash and existing.request_hash != expected_hash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Idempotency key reused with different payload.",
+                )
+            return JSONResponse(content=existing.response_body, status_code=existing.response_status)
 
     # Ensure estimates and summaries are up to date
     await compute_estimates_for_company(db, company.id, replace_existing=True)
     await refresh_emissions_summaries(db, company.id, request.reporting_year)
     await db.flush()
 
-    # Get annual totals
-    annual_totals = await get_annual_totals_by_scope(db, company.id, request.reporting_year)
-    total_co2e = sum(row[2] for row in annual_totals)  # row[2] is total_kg_co2e
-
-    # Build content snapshot
-    scope_1_total = sum(row[2] for row in annual_totals if row[0] == 1)
-    scope_2_total = sum(row[2] for row in annual_totals if row[0] == 2)
-    scope_3_total = sum(row[2] for row in annual_totals if row[0] == 3)
-    scope_3_breakdown = {}
-    for row in annual_totals:
-        if row[0] == 3 and row[1]:  # scope 3 with category
-            scope_3_breakdown[row[1]] = scope_3_breakdown.get(row[1], Decimal("0")) + row[2]
-
-    # Monthly breakdown
-    monthly_rows = await get_monthly_breakdown_by_scope(db, company.id, request.reporting_year)
-    monthly_breakdown = []
-    monthly_by_month: dict[str, dict[int, Decimal]] = {}
-    for period_value, scope, scope_3_cat, total in monthly_rows:
-        if period_value not in monthly_by_month:
-            monthly_by_month[period_value] = {1: Decimal("0"), 2: Decimal("0"), 3: Decimal("0")}
-        monthly_by_month[period_value][scope] += total
-
-    for month in sorted(monthly_by_month.keys()):
-        monthly_breakdown.append({
-            "month": month,
-            "scope_1": float(monthly_by_month[month].get(1, Decimal("0"))),
-            "scope_2": float(monthly_by_month[month].get(2, Decimal("0"))),
-            "scope_3": float(monthly_by_month[month].get(3, Decimal("0"))),
-            "total": float(sum(monthly_by_month[month].values())),
-        })
-
-    # Generate executive summary
-    executive_summary = f"""
-This carbon disclosure report presents {company.name}'s greenhouse gas (GHG) emissions for {request.reporting_year}.
-Total annual emissions: {total_co2e:.2f} kg CO₂e ({total_co2e / 1000:.2f} tCO₂e).
-
-Scope 1 (direct emissions): {scope_1_total:.2f} kg CO₂e
-Scope 2 (indirect emissions from purchased energy): {scope_2_total:.2f} kg CO₂e
-Scope 3 (other indirect emissions): {scope_3_total:.2f} kg CO₂e
-
-This report follows the GHG Protocol Corporate Standard and is suitable for enterprise procurement and vendor onboarding processes.
-"""
-
-    content_snapshot = {
-        "executive_summary": executive_summary.strip(),
-        "scope_1_kg_co2e": float(scope_1_total),
-        "scope_2_kg_co2e": float(scope_2_total),
-        "scope_3_kg_co2e": float(scope_3_total),
-        "scope_3_breakdown": {k: float(v) for k, v in scope_3_breakdown.items()},
-        "methodology_notes": "Emissions calculated using activity data multiplied by emission factors. Activity data sources include connected cloud providers, AI-estimated values, and manual entries. Each estimate tracks data quality (measured/estimated/manual), assumptions, and confidence scores.",
-        "assumptions_limitations": "Emission factors are sourced from recognized databases (EPA, DEFRA, provider-specific factors). Scope 3 coverage is limited to cloud services, travel, remote work, commuting, and purchased services. Some estimates may be based on industry benchmarks.",
-        "emission_factor_citations": [
-            {"source": "EPA", "url_or_ref": "EPA Emission Factors Hub"},
-            {"source": "DEFRA", "url_or_ref": "UK Government Conversion Factors"},
-            {"source": "Cloud Providers", "url_or_ref": "AWS/GCP/Azure sustainability reports"},
-        ],
-        "monthly_breakdown": monthly_breakdown,
-    }
+    content_snapshot_raw, total_co2e = await build_report_snapshot(
+        db, company_name=company.name, company_id=company.id, reporting_year=request.reporting_year
+    )
+    content_snapshot = jsonable_encoder(content_snapshot_raw)
 
     report = Report(
         company_id=company.id,
@@ -146,10 +115,18 @@ This report follows the GHG Protocol Corporate Standard and is suitable for ente
         generated_at=datetime.now(),
     )
     db.add(report)
+    await log_audit_action(
+        db,
+        user_id=user.id,
+        company_id=company.id,
+        action="report_created",
+        entity_type="report",
+        entity_id=report.id,
+    )
     await db.commit()
     await db.refresh(report)
 
-    return ReportDetailResponse(
+    response_payload = ReportDetailResponse(
         id=str(report.id),
         title=report.title,
         company_name_snapshot=report.company_name_snapshot,
@@ -162,21 +139,44 @@ This report follows the GHG Protocol Corporate Standard and is suitable for ente
         generated_at=report.generated_at,
         published_at=report.published_at,
     )
+    if idempotency_key:
+        await store_idempotency_record(
+            db,
+            company_id=company.id,
+            user_id=user.id,
+            endpoint=endpoint,
+            key=idempotency_key,
+            request_payload=request,
+            response_body=jsonable_encoder(response_payload),
+            response_status=status.HTTP_200_OK,
+        )
+        await db.commit()
+
+    return response_payload
 
 
 @router.get("/{report_id}", response_model=ReportDetailResponse)
 async def get_report(
     report_id: str,
-    company: CurrentCompany = None,
+    company: PaidCompany = None,
     db: DbSession = None,
 ):
     """Get report detail."""
     result = await db.execute(
-        select(Report).where(Report.id == UUID(report_id), Report.company_id == company.id)
+        select(Report).where(
+            Report.id == UUID(report_id),
+            Report.company_id == company.id,
+            Report.deleted_at.is_(None),
+        )
     )
     report = result.scalar_one_or_none()
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+    if report.status != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only draft reports can be deleted",
+        )
 
     return ReportDetailResponse(
         id=str(report.id),
@@ -196,12 +196,26 @@ async def get_report(
 @router.post("/{report_id}/publish")
 async def publish_report(
     report_id: str,
-    company: CurrentCompany = None,
+    company: PaidCompany = None,
+    user: NonDemoUser = None,
     db: DbSession = None,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
     """Publish a report and generate a shareable token."""
+    endpoint = f"POST /api/reports/{report_id}/publish"
+    if idempotency_key:
+        existing = await get_idempotency_record(
+            db, company_id=company.id, endpoint=endpoint, key=idempotency_key
+        )
+        if existing:
+            return JSONResponse(content=existing.response_body, status_code=existing.response_status)
+
     result = await db.execute(
-        select(Report).where(Report.id == UUID(report_id), Report.company_id == company.id)
+        select(Report).where(
+            Report.id == UUID(report_id),
+            Report.company_id == company.id,
+            Report.deleted_at.is_(None),
+        )
     )
     report = result.scalar_one_or_none()
     if report is None:
@@ -213,20 +227,78 @@ async def publish_report(
     report.status = "published"
     report.shareable_token = secrets.token_urlsafe(32)
     report.published_at = datetime.now()
+    await log_audit_action(
+        db,
+        user_id=user.id,
+        company_id=company.id,
+        action="report_published",
+        entity_type="report",
+        entity_id=report.id,
+    )
     await db.commit()
 
-    return {"status": "published", "shareable_token": report.shareable_token}
+    response_payload = {"status": "published", "shareable_token": report.shareable_token}
+    if idempotency_key:
+        await store_idempotency_record(
+            db,
+            company_id=company.id,
+            user_id=user.id,
+            endpoint=endpoint,
+            key=idempotency_key,
+            request_payload={"report_id": report_id},
+            response_body=response_payload,
+            response_status=status.HTTP_200_OK,
+        )
+        await db.commit()
+
+    return response_payload
+
+
+@router.delete("/{report_id}")
+async def delete_report(
+    report_id: str,
+    company: PaidCompany = None,
+    user: NonDemoUser = None,
+    db: DbSession = None,
+):
+    """Soft delete a report."""
+    result = await db.execute(
+        select(Report).where(
+            Report.id == UUID(report_id),
+            Report.company_id == company.id,
+            Report.deleted_at.is_(None),
+        )
+    )
+    report = result.scalar_one_or_none()
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+    report.deleted_at = utc_now()
+    await log_audit_action(
+        db,
+        user_id=user.id,
+        company_id=company.id,
+        action="report_deleted",
+        entity_type="report",
+        entity_id=report.id,
+    )
+    await db.commit()
+    return {"status": "deleted"}
 
 
 @router.get("/{report_id}/pdf")
 async def get_report_pdf(
     report_id: str,
-    company: CurrentCompany = None,
+    company: PaidCompany = None,
     db: DbSession = None,
 ):
     """Generate and return PDF of the report."""
     result = await db.execute(
-        select(Report).where(Report.id == UUID(report_id), Report.company_id == company.id)
+        select(Report).where(
+            Report.id == UUID(report_id),
+            Report.company_id == company.id,
+            Report.deleted_at.is_(None),
+        )
     )
     report = result.scalar_one_or_none()
     if report is None:
@@ -236,7 +308,7 @@ async def get_report_pdf(
     pdf_bytes = render_report_pdf(
         company_name=report.company_name_snapshot or company.name,
         reporting_year=report.reporting_year,
-        total_kg_co2e=float(report.total_kg_co2e),
+        total_kg_co2e=Decimal(report.total_kg_co2e),
         scope_1_kg=content.get("scope_1_kg_co2e", 0),
         scope_2_kg=content.get("scope_2_kg_co2e", 0),
         scope_3_kg=content.get("scope_3_kg_co2e", 0),
@@ -251,7 +323,8 @@ async def get_report_pdf(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'inline; filename="carbonly-report-{report.reporting_year}.pdf"'
+            "Content-Disposition": f'attachment; filename="carbonly-report-{report.reporting_year}.pdf"',
+            "Cache-Control": "private, max-age=60",
         },
     )
 
@@ -263,7 +336,11 @@ async def get_public_report(
 ):
     """Public share link (read-only report summary)."""
     result = await db.execute(
-        select(Report).where(Report.shareable_token == share_token, Report.status == "published")
+        select(Report).where(
+            Report.shareable_token == share_token,
+            Report.status == "published",
+            Report.deleted_at.is_(None),
+        )
     )
     report = result.scalar_one_or_none()
     if report is None:
@@ -275,7 +352,7 @@ async def get_public_report(
     return {
         "company_name": report.company_name_snapshot or "Unknown",
         "reporting_year": report.reporting_year,
-        "total_co2e": float(report.total_kg_co2e),
+        "total_co2e": report.total_kg_co2e,
         "executive_summary": content.get("executive_summary", ""),
         "scope_breakdown": {
             "scope_1": content.get("scope_1_kg_co2e", 0),

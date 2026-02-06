@@ -16,32 +16,19 @@ from app.config import get_settings
 from app.database import get_db
 from app.models.company import Company
 from app.models.user import User
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError, InvalidHashError
 
 settings = get_settings()
 _argon2 = PasswordHasher()
 security = HTTPBearer()
-
-
-def _is_bcrypt_hash(hash_str: str) -> bool:
-    """Check if hash looks like bcrypt ($2a$, $2b$, $2y$)."""
-    return hash_str.startswith(("$2a$", "$2b$", "$2y$"))
+security_optional = HTTPBearer(auto_error=False)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password. Supports argon2 (primary) and legacy bcrypt hashes."""
-    if _is_bcrypt_hash(hashed_password):
-        try:
-            import bcrypt
-            return bcrypt.checkpw(
-                plain_password.encode("utf-8"),
-                hashed_password.encode("utf-8"),
-            )
-        except Exception:
-            return False
     try:
-        _argon2.verify(hashed_password, plain_password)
-        return True
-    except VerifyMismatchError:
+        return _argon2.verify(hashed_password, plain_password)
+    except (VerifyMismatchError, InvalidHashError):
         return False
 
 
@@ -100,6 +87,26 @@ async def get_current_user(
     return user
 
 
+async def get_current_user_optional(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_optional),
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+) -> User | None:
+    if credentials is None:
+        return None
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            return None
+    except JWTError:
+        return None
+    result = await db.execute(
+        select(User).where(User.id == UUID(user_id), User.is_active == True)
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_current_company(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -114,6 +121,37 @@ async def get_current_company(
     return company
 
 
+async def require_not_demo_user(
+    user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    if user.is_demo:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": {"code": "demo_read_only", "message": "Demo accounts are read-only."}},
+        )
+    return user
+
+
+async def require_paid_plan(
+    company: Annotated[Company, Depends(get_current_company)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> Company:
+    if user.is_demo:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"error": {"code": "payment_required", "message": "Upgrade to export reports."}},
+        )
+    if company.plan in {"starter", "pro"} and company.billing_status in {"active", "trialing"}:
+        return company
+    raise HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail={"error": {"code": "payment_required", "message": "Upgrade to export reports."}},
+    )
+
+
 CurrentUser = Annotated[User, Depends(get_current_user)]
 CurrentCompany = Annotated[Company, Depends(get_current_company)]
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+OptionalUser = Annotated[User | None, Depends(get_current_user_optional)]
+NonDemoUser = Annotated[User, Depends(require_not_demo_user)]
+PaidCompany = Annotated[Company, Depends(require_paid_plan)]

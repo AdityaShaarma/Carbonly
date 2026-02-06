@@ -1,28 +1,43 @@
 """PDF report generation using WeasyPrint."""
+from decimal import Decimal
 from io import BytesIO
 
 from weasyprint import HTML
 
 
+def _to_decimal(value: object) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
 def render_report_pdf(
     company_name: str,
     reporting_year: int,
-    total_kg_co2e: float,
-    scope_1_kg: float,
-    scope_2_kg: float,
-    scope_3_kg: float,
-    scope_3_breakdown: dict[str, float],
+    total_kg_co2e: Decimal,
+    scope_1_kg: Decimal,
+    scope_2_kg: Decimal,
+    scope_3_kg: Decimal,
+    scope_3_breakdown: dict[str, Decimal],
     executive_summary: str,
     methodology_notes: str,
     assumptions_limitations: str,
     emission_factor_citations: list[dict],
 ) -> bytes:
     """Generate PDF bytes for a carbon disclosure report."""
-    total_tco2e = total_kg_co2e / 1000.0
+    total_kg_co2e = _to_decimal(total_kg_co2e)
+    scope_1_kg = _to_decimal(scope_1_kg)
+    scope_2_kg = _to_decimal(scope_2_kg)
+    scope_3_kg = _to_decimal(scope_3_kg)
+    total_tco2e = total_kg_co2e / Decimal("1000")
 
     scope3_rows = ""
     for cat, val in (scope_3_breakdown or {}).items():
-        scope3_rows += f"<tr><td>{cat}</td><td>{val:.2f}</td><td>{val/1000:.2f}</td></tr>"
+        val_dec = _to_decimal(val)
+        scope3_rows += (
+            f"<tr><td>{cat}</td><td>{val_dec:.2f}</td>"
+            f"<td>{(val_dec / Decimal('1000')):.2f}</td></tr>"
+        )
 
     citations_rows = ""
     for c in emission_factor_citations or []:
@@ -63,9 +78,9 @@ def render_report_pdf(
     <h2>Scope Breakdown</h2>
     <table>
         <tr><th>Scope</th><th>kg CO₂e</th><th>tCO₂e</th></tr>
-        <tr><td>Scope 1 (Direct)</td><td>{scope_1_kg:.2f}</td><td>{scope_1_kg/1000:.2f}</td></tr>
-        <tr><td>Scope 2 (Indirect - Energy)</td><td>{scope_2_kg:.2f}</td><td>{scope_2_kg/1000:.2f}</td></tr>
-        <tr><td>Scope 3 (Other Indirect)</td><td>{scope_3_kg:.2f}</td><td>{scope_3_kg/1000:.2f}</td></tr>
+        <tr><td>Scope 1 (Direct)</td><td>{scope_1_kg:.2f}</td><td>{(scope_1_kg / Decimal('1000')):.2f}</td></tr>
+        <tr><td>Scope 2 (Indirect - Energy)</td><td>{scope_2_kg:.2f}</td><td>{(scope_2_kg / Decimal('1000')):.2f}</td></tr>
+        <tr><td>Scope 3 (Other Indirect)</td><td>{scope_3_kg:.2f}</td><td>{(scope_3_kg / Decimal('1000')):.2f}</td></tr>
     </table>
 """
 

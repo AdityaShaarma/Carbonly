@@ -5,6 +5,8 @@ export interface User {
   email: string;
   full_name: string | null;
   company_id: string;
+  is_email_verified: boolean;
+  is_demo: boolean;
 }
 
 export interface Company {
@@ -17,6 +19,10 @@ export interface Company {
   email_notifications: boolean;
   monthly_summary_reports: boolean;
   unit_system: string;
+  plan: string;
+  billing_status: string;
+  subscription_status: string;
+  current_period_end: string | null;
 }
 
 export interface MeResponse {
@@ -131,6 +137,7 @@ export interface OnboardingState {
   upload_csv: boolean;
   add_manual_activity: boolean;
   create_report: boolean;
+  confirm_company_details: boolean;
 }
 
 export interface OnboardingResponse {

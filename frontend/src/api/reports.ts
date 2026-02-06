@@ -25,7 +25,12 @@ export async function publishReport(reportId: string): Promise<{ status: string;
   return data;
 }
 
-export async function openReportPdf(reportId: string): Promise<void> {
+export async function deleteReport(reportId: string): Promise<{ status: string }> {
+  const { data } = await api.delete<{ status: string }>(`/api/reports/${reportId}`);
+  return data;
+}
+
+export async function openReportPdf(reportId: string, reportingYear: number): Promise<void> {
   const base = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
   const token = localStorage.getItem("carbonly_token");
   const res = await fetch(`${base}/api/reports/${reportId}/pdf`, {
@@ -34,7 +39,12 @@ export async function openReportPdf(reportId: string): Promise<void> {
   if (!res.ok) throw new Error("Failed to load PDF");
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
-  window.open(url, "_blank");
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `carbonly-report-${reportingYear}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
   URL.revokeObjectURL(url);
 }
 

@@ -3,7 +3,7 @@ import { useQuery } from "react-query";
 import { fetchPublicReport } from "@/api/reports";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Link } from "react-router-dom";
-import { formatKgToTons } from "@/utils/format";
+import { formatEmissions } from "@/utils/format";
 
 export function PublicReportPage() {
   const { shareToken } = useParams<{ shareToken: string }>();
@@ -57,7 +57,7 @@ export function PublicReportPage() {
                 Total emissions
               </p>
               <p className="text-2xl font-semibold">
-                {formatKgToTons(data.total_co2e)} tCO₂e
+                {formatEmissions(data.total_co2e)}
               </p>
             </div>
             {data.executive_summary && (
@@ -71,13 +71,13 @@ export function PublicReportPage() {
               </p>
               <ul className="space-y-1 text-sm">
                 <li>
-                  Scope 1: {formatKgToTons(data.scope_breakdown.scope_1)} tCO₂e
+                  Scope 1: {formatEmissions(data.scope_breakdown.scope_1)}
                 </li>
                 <li>
-                  Scope 2: {formatKgToTons(data.scope_breakdown.scope_2)} tCO₂e
+                  Scope 2: {formatEmissions(data.scope_breakdown.scope_2)}
                 </li>
                 <li>
-                  Scope 3: {formatKgToTons(data.scope_breakdown.scope_3)} tCO₂e
+                  Scope 3: {formatEmissions(data.scope_breakdown.scope_3)}
                 </li>
               </ul>
             </div>
@@ -91,7 +91,7 @@ export function PublicReportPage() {
                     {Object.entries(data.scope_3_breakdown).map(
                       ([cat, val]) => (
                         <li key={cat}>
-                          {cat}: {formatKgToTons(val)} tCO₂e
+                          {cat}: {formatEmissions(val)}
                         </li>
                       )
                     )}

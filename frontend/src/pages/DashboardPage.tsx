@@ -25,6 +25,7 @@ import { useMutation, useQueryClient } from "react-query";
 import toast from "react-hot-toast";
 import { formatKgToTons, formatNumber, formatEmissions } from "@/utils/format";
 import { Link } from "react-router-dom";
+import { DEMO_MODE } from "@/config/env";
 
 export function DashboardPage() {
   const { year, setYear, options } = useYearSelector();
@@ -86,6 +87,15 @@ export function DashboardPage() {
         </div>
       </div>
 
+      {DEMO_MODE && (
+        <Card>
+          <CardContent className="py-4 text-sm text-amber-700">
+            Demo mode is enabled. Metrics shown are sample data for investor
+            walkthroughs.
+          </CardContent>
+        </Card>
+      )}
+
       {isLoading ? (
         <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -124,6 +134,21 @@ export function DashboardPage() {
                       Connect a data source or add a manual entry to populate
                       your dashboard.
                     </p>
+                    <div className="mt-3 space-y-1 text-sm text-muted-foreground">
+                      <p>
+                        <span className="font-medium text-foreground">
+                          What is Scope 3?
+                        </span>{" "}
+                        It includes indirect emissions like cloud usage,
+                        commuting, and travel.
+                      </p>
+                      <p>
+                        <span className="font-medium text-foreground">
+                          Why cloud emissions matter
+                        </span>{" "}
+                        Cloud workloads can be your largest Scope 3 category.
+                      </p>
+                    </div>
                   </div>
                   <Link to="/onboarding">
                     <Button>Start onboarding</Button>
@@ -164,7 +189,7 @@ export function DashboardPage() {
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardDescription>CO₂e per employee (t)</CardDescription>
+                <CardDescription>CO₂e per employee (tCO₂e)</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
@@ -190,23 +215,49 @@ export function DashboardPage() {
                 <div className="flex items-center justify-between text-sm">
                   <span>Total</span>
                   <span className="font-medium">
-                    {formatKgToTons(totals?.total_co2e ?? 0)} tCO₂e/year
+                    {formatEmissions(totals?.total_co2e ?? 0)} / year
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <span>Scope 1</span>
+                  <span className="flex items-center gap-2">
+                    Scope 1
+                    <span
+                      className="text-xs text-muted-foreground cursor-help"
+                      title="Direct emissions from owned or controlled sources."
+                    >
+                      ⓘ
+                    </span>
+                  </span>
                   <span>
-                    {formatKgToTons(totals?.scope_1 ?? 0)} t
-                    (Measured/Estimated)
+                    {formatEmissions(totals?.scope_1 ?? 0)}{" "}
+                    <span className="text-xs text-muted-foreground">
+                      (Measured/Estimated)
+                    </span>
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <span>Scope 2</span>
-                  <span>{formatKgToTons(totals?.scope_2 ?? 0)} t</span>
+                  <span className="flex items-center gap-2">
+                    Scope 2
+                    <span
+                      className="text-xs text-muted-foreground cursor-help"
+                      title="Indirect emissions from purchased energy."
+                    >
+                      ⓘ
+                    </span>
+                  </span>
+                  <span>{formatEmissions(totals?.scope_2 ?? 0)}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <span>Scope 3</span>
-                  <span>{formatKgToTons(totals?.scope_3 ?? 0)} t</span>
+                  <span className="flex items-center gap-2">
+                    Scope 3
+                    <span
+                      className="text-xs text-muted-foreground cursor-help"
+                      title="Other indirect emissions in your value chain."
+                    >
+                      ⓘ
+                    </span>
+                  </span>
+                  <span>{formatEmissions(totals?.scope_3 ?? 0)}</span>
                 </div>
               </div>
             </CardContent>
@@ -262,10 +313,12 @@ export function DashboardPage() {
                   <LineChart data={trend}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="month" />
-                    <YAxis tickFormatter={(v) => `${formatKgToTons(v, 0)}t`} />
+                    <YAxis
+                      tickFormatter={(v) => `${formatKgToTons(v, 0)} tCO₂e`}
+                    />
                     <Tooltip
                       formatter={(v: number) => [
-                        `${formatKgToTons(v)} t`,
+                        formatEmissions(v),
                         "Emissions",
                       ]}
                     />
@@ -302,8 +355,12 @@ export function DashboardPage() {
           ) : (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-12">
-                <p className="text-muted-foreground mb-4">
+                <p className="text-muted-foreground mb-2">
                   No emissions data yet.
+                </p>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Connect a cloud provider or upload a CSV to calculate your
+                  Scope 3 baseline.
                 </p>
                 <Link to="/integrations">
                   <Button>Connect an integration</Button>
@@ -324,7 +381,7 @@ export function DashboardPage() {
                       ({ category, total_kg_co2e }) => (
                         <li key={category} className="flex justify-between">
                           <span className="capitalize">{category}</span>
-                          <span>{formatKgToTons(total_kg_co2e)} tCO₂e</span>
+                          <span>{formatEmissions(total_kg_co2e)}</span>
                         </li>
                       )
                     )}

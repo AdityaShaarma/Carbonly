@@ -1,6 +1,7 @@
 """Company model."""
 import uuid
-from sqlalchemy import String, Integer, Boolean, ForeignKey
+from datetime import datetime
+from sqlalchemy import String, Integer, Boolean, ForeignKey, DateTime
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -19,6 +20,16 @@ class Company(Base, UUIDMixin, TimestampMixin):
     monthly_summary_reports: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     unit_system: Mapped[str] = mapped_column(String(32), default="metric_tco2e", nullable=False)
     onboarding_state: Mapped[dict | None] = mapped_column("onboarding_state", JSONB, nullable=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    plan: Mapped[str] = mapped_column(String(32), default="demo", nullable=False)
+    billing_status: Mapped[str] = mapped_column(String(32), default="inactive", nullable=False)
+    subscription_status: Mapped[str] = mapped_column(
+        String(32), default="inactive", nullable=False
+    )
+    current_period_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     users: Mapped[list["User"]] = relationship("User", back_populates="company")
     data_source_connections: Mapped[list["DataSourceConnection"]] = relationship(

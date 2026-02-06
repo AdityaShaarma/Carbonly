@@ -1,14 +1,15 @@
 """Integrations API endpoints."""
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Header
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import CurrentCompany, CurrentUser, DbSession
+from app.auth import CurrentCompany, CurrentUser, DbSession, NonDemoUser
 from app.models.activity_record import ActivityRecord
 from app.models.data_source_connection import DataSourceConnection
 from app.schemas.integrations import (
@@ -19,6 +20,19 @@ from app.schemas.integrations import (
 )
 from app.services.csv_parser import parse_csv_activities
 from app.services.emissions import compute_estimates_for_company, refresh_emissions_summaries
+from app.services.integration_service import (
+    create_estimated_activity,
+    create_mock_cloud_activities,
+    ensure_connection,
+    get_connection,
+    has_mock_activities,
+)
+from app.services.idempotency import (
+    get_idempotency_record,
+    payload_hash,
+    store_idempotency_record,
+)
+from app.services.audit import log_audit_action
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
@@ -68,19 +82,29 @@ async def list_integrations(
 async def sync_integration(
     provider: str,
     company: CurrentCompany = None,
+    user: NonDemoUser = None,
     db: DbSession = None,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
     """
     Sync data from a provider (AWS, GCP, Azure).
     For now, generates mock ActivityRecords, then recomputes estimates and summaries.
     """
-    result = await db.execute(
-        select(DataSourceConnection).where(
-            DataSourceConnection.company_id == company.id,
-            DataSourceConnection.source_type == provider,
+    endpoint = f"POST /api/integrations/{provider}/sync"
+    if idempotency_key:
+        existing = await get_idempotency_record(
+            db, company_id=company.id, endpoint=endpoint, key=idempotency_key
         )
-    )
-    conn = result.scalar_one_or_none()
+        if existing:
+            expected_hash = payload_hash({"provider": provider})
+            if existing.request_hash and expected_hash and existing.request_hash != expected_hash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Idempotency key reused with different payload.",
+                )
+            return JSONResponse(content=existing.response_body, status_code=existing.response_status)
+
+    conn = await get_connection(db, company_id=company.id, provider=provider)
     if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integration not found")
 
@@ -89,128 +113,112 @@ async def sync_integration(
         conn.status = "connected"
         await db.flush()
 
-    # Mock: create sample cloud usage activity records
-    # In production, this would call provider APIs
     year = company.reporting_year
-    period_start = date(year, 1, 1)
-    period_end = date(year, 12, 31)
-
-    # Mock cloud usage (e.g., compute hours, storage GB-months)
-    mock_activities = [
-        ActivityRecord(
-            id=uuid4(),
-            company_id=company.id,
-            data_source_connection_id=conn.id,
-            scope=3,
-            scope_3_category="cloud",
-            activity_type="cloud_compute_hours",
-            quantity=Decimal("10000.0"),
-            unit="hours",
-            period_start=period_start,
-            period_end=period_end,
-            data_quality="measured",
-            assumptions="Mock data from provider API",
-            confidence_score=Decimal("95.0"),
-        ),
-        ActivityRecord(
-            id=uuid4(),
-            company_id=company.id,
-            data_source_connection_id=conn.id,
-            scope=3,
-            scope_3_category="cloud",
-            activity_type="cloud_storage_gb_months",
-            quantity=Decimal("5000.0"),
-            unit="GB-months",
-            period_start=period_start,
-            period_end=period_end,
-            data_quality="measured",
-            assumptions="Mock data from provider API",
-            confidence_score=Decimal("95.0"),
-        ),
-    ]
-    for activity in mock_activities:
-        db.add(activity)
-    await db.flush()
-
-    # Update connection last_synced_at
-    conn.last_synced_at = datetime.now()
-    await db.flush()
+    activities_created = 0
+    if not await has_mock_activities(db, company_id=company.id, connection_id=conn.id, year=year):
+        created = await create_mock_cloud_activities(
+            db, company_id=company.id, connection=conn, year=year
+        )
+        activities_created = len(created)
 
     # Recompute emissions
-    await compute_estimates_for_company(db, company.id, period_start, period_end, replace_existing=False)
+    await compute_estimates_for_company(
+        db, company.id, date(year, 1, 1), date(year, 12, 31), replace_existing=False
+    )
     await refresh_emissions_summaries(db, company.id, year)
+    await log_audit_action(
+        db,
+        user_id=user.id,
+        company_id=company.id,
+        action="integration_synced",
+        entity_type="data_source_connection",
+        entity_id=conn.id,
+    )
     await db.commit()
 
-    return {"status": "synced", "activities_created": len(mock_activities)}
+    response_payload = {"status": "synced", "activities_created": activities_created}
+    if idempotency_key:
+        await store_idempotency_record(
+            db,
+            company_id=company.id,
+            user_id=user.id,
+            endpoint=endpoint,
+            key=idempotency_key,
+            request_payload={"provider": provider},
+            response_body=response_payload,
+            response_status=status.HTTP_200_OK,
+        )
+        await db.commit()
+
+    return response_payload
 
 
 @router.post("/{provider}/estimate")
 async def estimate_integration(
     provider: str,
     company: CurrentCompany = None,
+    user: NonDemoUser = None,
     db: DbSession = None,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
     """
     Set provider to AI estimated and create estimated ActivityRecords.
     """
-    result = await db.execute(
-        select(DataSourceConnection).where(
-            DataSourceConnection.company_id == company.id,
-            DataSourceConnection.source_type == provider,
+    endpoint = f"POST /api/integrations/{provider}/estimate"
+    if idempotency_key:
+        existing = await get_idempotency_record(
+            db, company_id=company.id, endpoint=endpoint, key=idempotency_key
         )
+        if existing:
+            return JSONResponse(content=existing.response_body, status_code=existing.response_status)
+
+    conn = await ensure_connection(
+        db, company_id=company.id, provider=provider, status="ai_estimated"
     )
-    conn = result.scalar_one_or_none()
-    if conn is None:
-        # Create if doesn't exist
-        display_names = {"aws": "AWS", "gcp": "GCP", "azure": "Azure"}
-        conn = DataSourceConnection(
-            id=uuid4(),
-            company_id=company.id,
-            source_type=provider,
-            display_name=display_names.get(provider, provider.upper()),
-            status="ai_estimated",
-        )
-        db.add(conn)
-        await db.flush()
 
     conn.status = "ai_estimated"
     await db.flush()
 
-    # Create estimated activity records
     year = company.reporting_year
-    period_start = date(year, 1, 1)
-    period_end = date(year, 12, 31)
-
-    estimated_activity = ActivityRecord(
-        id=uuid4(),
-        company_id=company.id,
-        data_source_connection_id=conn.id,
-        scope=3,
-        scope_3_category="cloud",
-        activity_type="cloud_compute_hours",
-        quantity=Decimal("8000.0"),  # Estimated
-        unit="hours",
-        period_start=period_start,
-        period_end=period_end,
-        data_quality="estimated",
-        assumptions="AI estimated based on company size and industry benchmarks",
-        confidence_score=Decimal("70.0"),
-    )
-    db.add(estimated_activity)
-    await db.flush()
+    await create_estimated_activity(db, company_id=company.id, connection=conn, year=year)
 
     # Recompute emissions
-    await compute_estimates_for_company(db, company.id, period_start, period_end, replace_existing=False)
+    await compute_estimates_for_company(
+        db, company.id, date(year, 1, 1), date(year, 12, 31), replace_existing=False
+    )
     await refresh_emissions_summaries(db, company.id, year)
+    await log_audit_action(
+        db,
+        user_id=user.id,
+        company_id=company.id,
+        action="integration_estimated",
+        entity_type="data_source_connection",
+        entity_id=conn.id,
+    )
     await db.commit()
 
-    return {"status": "estimated", "activity_created": True}
+    response_payload = {"status": "estimated", "activity_created": True}
+    if idempotency_key:
+        await store_idempotency_record(
+            db,
+            company_id=company.id,
+            user_id=user.id,
+            endpoint=endpoint,
+            key=idempotency_key,
+            request_payload={"provider": provider},
+            response_body=response_payload,
+            response_status=status.HTTP_200_OK,
+        )
+        await db.commit()
+
+    return response_payload
 
 
 @router.post("/manual/activity")
 async def create_manual_activity(
     request: ManualActivityRequest,
     company: CurrentCompany = None,
+    user: NonDemoUser = None,
     db: DbSession = None,
 ):
     """Create a manual activity record."""
@@ -235,6 +243,14 @@ async def create_manual_activity(
     # Recompute emissions
     await compute_estimates_for_company(db, company.id, replace_existing=False)
     await refresh_emissions_summaries(db, company.id, company.reporting_year)
+    await log_audit_action(
+        db,
+        user_id=user.id,
+        company_id=company.id,
+        action="manual_activity_created",
+        entity_type="activity_record",
+        entity_id=activity.id,
+    )
     await db.commit()
 
     return {"id": str(activity.id), "status": "created"}
@@ -244,6 +260,7 @@ async def create_manual_activity(
 async def upload_manual_csv(
     file: UploadFile = File(..., description="CSV file with columns: scope, activity_type, quantity, unit, period_start, period_end"),
     company: CurrentCompany = None,
+    user: NonDemoUser = None,
     db: DbSession = None,
 ):
     """
@@ -278,6 +295,14 @@ async def upload_manual_csv(
         await db.flush()
         await compute_estimates_for_company(db, company.id, replace_existing=False)
         await refresh_emissions_summaries(db, company.id, company.reporting_year)
+        await log_audit_action(
+            db,
+            user_id=user.id,
+            company_id=company.id,
+            action="manual_csv_uploaded",
+            entity_type="activity_record",
+            entity_id=None,
+        )
     await db.commit()
 
     return CsvUploadResponse(inserted=inserted, errors=errors)

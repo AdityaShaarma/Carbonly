@@ -2,12 +2,16 @@
 from typing import Annotated
 import time
 from collections import defaultdict, deque
+from datetime import datetime, timedelta, timezone
+import hashlib
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select, text
 
 from app.auth import (
     CurrentUser,
+    OptionalUser,
     DbSession,
     create_access_token,
     get_password_hash,
@@ -16,6 +20,10 @@ from app.auth import (
 from app.config import get_settings
 from app.models.company import Company
 from app.models.user import User
+from app.models.email_verification_token import EmailVerificationToken
+from app.models.password_reset_token import PasswordResetToken
+from app.services.email import send_email
+from app.services.demo_seed import ensure_demo_data
 from app.schemas.auth import (
     LoginRequest,
     MeResponse,
@@ -23,6 +31,9 @@ from app.schemas.auth import (
     RegisterResponse,
     PasswordResetRequest,
     PasswordResetConfirm,
+    SignupRequest,
+    SignupResponse,
+    VerifyEmailRequest,
     TokenResponse,
     UserResponse,
 )
@@ -43,6 +54,8 @@ def _rate_limit_key(request: Request, action: str) -> str:
 
 
 def rate_limit(request: Request, action: str):
+    if not settings.rate_limit_enabled:
+        return
     key = _rate_limit_key(request, action)
     now = time.time()
     q = _rate_limits[key]
@@ -67,12 +80,12 @@ async def login(request: LoginRequest, http_request: Request, db: DbSession):
     if user is None or user.password_hash is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail={"error": {"code": "invalid_credentials", "message": "Incorrect email or password"}},
         )
     if not verify_password(request.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail={"error": {"code": "invalid_credentials", "message": "Incorrect email or password"}},
         )
 
     access_token = create_access_token(data={"sub": str(user.id)})
@@ -86,7 +99,8 @@ async def get_current_user_info(user: CurrentUser, db: DbSession):
     company = result.scalar_one_or_none()
     if company is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Company not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "company_not_found", "message": "Company not found"}},
         )
 
     return MeResponse(
@@ -95,6 +109,8 @@ async def get_current_user_info(user: CurrentUser, db: DbSession):
             email=user.email,
             full_name=user.full_name,
             company_id=str(user.company_id),
+            is_email_verified=user.is_email_verified,
+            is_demo=user.is_demo,
         ),
         company=CompanyResponse(
             id=str(company.id),
@@ -106,6 +122,12 @@ async def get_current_user_info(user: CurrentUser, db: DbSession):
             email_notifications=company.email_notifications,
             monthly_summary_reports=company.monthly_summary_reports,
             unit_system=company.unit_system,
+            plan=company.plan,
+            billing_status=company.billing_status,
+            subscription_status=company.subscription_status,
+            current_period_end=company.current_period_end.isoformat()
+            if company.current_period_end
+            else None,
         ),
     )
 
@@ -116,7 +138,10 @@ async def register(request: RegisterRequest, http_request: Request, db: DbSessio
     rate_limit(http_request, "register")
     existing = (await db.execute(select(User).where(User.email == request.email))).scalar_one_or_none()
     if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": {"code": "email_exists", "message": "Email already registered"}},
+        )
 
     company = Company(
         name=request.company_name,
@@ -143,6 +168,8 @@ async def register(request: RegisterRequest, http_request: Request, db: DbSessio
         company_id=company.id,
         is_active=True,
         password_hash=get_password_hash(request.password),
+        is_email_verified=False,
+        is_demo=False,
     )
     db.add(user)
     await db.commit()
@@ -156,6 +183,8 @@ async def register(request: RegisterRequest, http_request: Request, db: DbSessio
             email=user.email,
             full_name=user.full_name,
             company_id=str(user.company_id),
+            is_email_verified=user.is_email_verified,
+            is_demo=user.is_demo,
         ),
         company=CompanyResponse(
             id=str(company.id),
@@ -167,20 +196,191 @@ async def register(request: RegisterRequest, http_request: Request, db: DbSessio
             email_notifications=company.email_notifications,
             monthly_summary_reports=company.monthly_summary_reports,
             unit_system=company.unit_system,
+            plan=company.plan,
+            billing_status=company.billing_status,
+            subscription_status=company.subscription_status,
+            current_period_end=company.current_period_end.isoformat()
+            if company.current_period_end
+            else None,
         ),
     )
 
 
-@router.post("/password-reset/request")
-async def password_reset_request(request: PasswordResetRequest, http_request: Request):
-    rate_limit(http_request, "password_reset_request")
-    raise HTTPException(status_code=501, detail="Password reset not implemented for MVP")
+def _token_hash(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
-@router.post("/password-reset/confirm")
-async def password_reset_confirm(request: PasswordResetConfirm, http_request: Request):
-    rate_limit(http_request, "password_reset_confirm")
-    raise HTTPException(status_code=501, detail="Password reset not implemented for MVP")
+def _verification_expires_at() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(hours=24)
+
+
+def _reset_expires_at() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(minutes=45)
+
+
+@router.post("/signup", response_model=SignupResponse)
+async def signup(request: SignupRequest, http_request: Request, db: DbSession):
+    rate_limit(http_request, "signup")
+    existing = (await db.execute(select(User).where(User.email == request.email))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": {"code": "email_exists", "message": "Email already registered"}},
+        )
+
+    company_name = request.email.split("@")[0].strip().title() or "New Company"
+    company = Company(
+        name=f"{company_name} Company",
+        industry="SaaS",
+        employee_count=1,
+        hq_location="",
+        reporting_year=2025,
+        email_notifications=True,
+        monthly_summary_reports=True,
+        unit_system="metric_tco2e",
+        onboarding_state={
+            "connect_aws": False,
+            "upload_csv": False,
+            "add_manual_activity": False,
+            "create_report": False,
+        },
+    )
+    db.add(company)
+    await db.flush()
+
+    user = User(
+        email=request.email,
+        full_name=request.full_name,
+        company_id=company.id,
+        is_active=True,
+        password_hash=get_password_hash(request.password),
+        is_email_verified=False,
+        is_demo=False,
+    )
+    db.add(user)
+    await db.commit()
+
+    access_token = create_access_token(data={"sub": str(user.id)})
+    return SignupResponse(
+        access_token=access_token,
+        token_type="bearer",
+        user=UserResponse(
+            id=str(user.id),
+            email=user.email,
+            full_name=user.full_name,
+            company_id=str(user.company_id),
+            is_email_verified=user.is_email_verified,
+            is_demo=user.is_demo,
+        ),
+    )
+
+
+@router.post("/verify/request")
+async def request_email_verification(
+    request: VerifyEmailRequest,
+    http_request: Request,
+    db: DbSession,
+    user: OptionalUser = None,
+):
+    rate_limit(http_request, "verify_request")
+    target_user = user
+    if request.email:
+        target_user = (
+            await db.execute(select(User).where(User.email == request.email))
+        ).scalar_one_or_none()
+
+    if target_user:
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = _token_hash(raw_token)
+        db.add(
+            EmailVerificationToken(
+                user_id=target_user.id,
+                token_hash=token_hash,
+                expires_at=_verification_expires_at(),
+            )
+        )
+        await db.commit()
+        verify_link = f"{settings.frontend_base_url}/verify-email?token={raw_token}"
+        send_email(
+            to=target_user.email,
+            subject="Verify your Carbonly email",
+            body=f"Verify your email: {verify_link}",
+        )
+    return {"ok": True}
+
+
+@router.get("/verify")
+async def verify_email(token: str, db: DbSession):
+    token_hash = _token_hash(token)
+    record = (
+        await db.execute(
+            select(EmailVerificationToken).where(EmailVerificationToken.token_hash == token_hash)
+        )
+    ).scalar_one_or_none()
+    if not record or record.used_at or record.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": {"code": "invalid_token", "message": "Verification token is invalid or expired"}},
+        )
+    user = (await db.execute(select(User).where(User.id == record.user_id))).scalar_one()
+    user.is_email_verified = True
+    record.used_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/password/forgot")
+async def password_forgot(request: PasswordResetRequest, http_request: Request, db: DbSession):
+    rate_limit(http_request, "password_forgot")
+    user = (await db.execute(select(User).where(User.email == request.email))).scalar_one_or_none()
+    if user:
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = _token_hash(raw_token)
+        db.add(
+            PasswordResetToken(
+                user_id=user.id,
+                token_hash=token_hash,
+                expires_at=_reset_expires_at(),
+            )
+        )
+        await db.commit()
+        reset_link = f"{settings.frontend_base_url}/reset-password?token={raw_token}"
+        send_email(
+            to=user.email,
+            subject="Reset your Carbonly password",
+            body=f"Reset your password: {reset_link}",
+        )
+    return {"ok": True}
+
+
+@router.post("/password/reset")
+async def password_reset(request: PasswordResetConfirm, http_request: Request, db: DbSession):
+    rate_limit(http_request, "password_reset")
+    token_hash = _token_hash(request.token)
+    record = (
+        await db.execute(
+            select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)
+        )
+    ).scalar_one_or_none()
+    if not record or record.used_at or record.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": {"code": "invalid_token", "message": "Reset token is invalid or expired"}},
+        )
+    user = (await db.execute(select(User).where(User.id == record.user_id))).scalar_one()
+    user.password_hash = get_password_hash(request.new_password)
+    record.used_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/demo")
+async def demo_login(db: DbSession):
+    if not settings.demo_mode:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    user = await ensure_demo_data(db)
+    access_token = create_access_token(data={"sub": str(user.id)})
+    return TokenResponse(access_token=access_token, token_type="bearer")
 
 
 @router.post("/dev-seed")
@@ -261,6 +461,8 @@ async def dev_seed(db: DbSession):
         company_id=company.id,
         is_active=True,
         password_hash=get_password_hash("password123"),
+        is_email_verified=True,
+        is_demo=False,
     )
     db.add(user)
     await db.flush()

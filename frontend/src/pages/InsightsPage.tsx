@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
 import { cn } from "@/utils/cn";
+import { ProFeatureGate } from "@/components/billing/ProFeatureGate";
 
 export function InsightsPage() {
   const { year, setYear, options } = useYearSelector();
@@ -45,63 +46,65 @@ export function InsightsPage() {
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Reduction recommendations</CardTitle>
-          <CardDescription>
-            Actions to lower your carbon footprint
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="space-y-3">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="h-20 animate-pulse rounded bg-muted" />
-              ))}
-            </div>
-          ) : insights.length === 0 ? (
-            <p className="text-muted-foreground">No insights for this year.</p>
-          ) : (
-            <ul className="space-y-4">
-              {insights.map((insight) => (
-                <li
-                  key={insight.id}
-                  className="rounded-lg border border-border p-4"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <p className="font-medium">{insight.title}</p>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        {insight.description}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "rounded-full px-2 py-0.5 text-xs font-medium capitalize",
-                          insight.impact_level === "High" &&
-                            "bg-primary/10 text-primary",
-                          insight.impact_level === "Medium" &&
-                            "bg-amber-100 text-amber-800",
-                          insight.impact_level === "Low" &&
-                            "bg-muted text-muted-foreground"
-                        )}
-                      >
-                        {insight.impact_level}
-                      </span>
-                      {insight.estimated_reduction_percent != null && (
-                        <span className="text-sm text-muted-foreground">
-                          ~{insight.estimated_reduction_percent}% reduction
+      <ProFeatureGate>
+        <Card>
+          <CardHeader>
+            <CardTitle>Reduction recommendations</CardTitle>
+            <CardDescription>
+              Actions to lower your carbon footprint
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className="h-20 animate-pulse rounded bg-muted" />
+                ))}
+              </div>
+            ) : insights.length === 0 ? (
+              <p className="text-muted-foreground">No insights for this year.</p>
+            ) : (
+              <ul className="space-y-4">
+                {insights.map((insight) => (
+                  <li
+                    key={insight.id}
+                    className="rounded-lg border border-border p-4"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium">{insight.title}</p>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          {insight.description}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={cn(
+                            "rounded-full px-2 py-0.5 text-xs font-medium capitalize",
+                            insight.impact_level === "High" &&
+                              "bg-primary/10 text-primary",
+                            insight.impact_level === "Medium" &&
+                              "bg-amber-100 text-amber-800",
+                            insight.impact_level === "Low" &&
+                              "bg-muted text-muted-foreground"
+                          )}
+                        >
+                          {insight.impact_level}
                         </span>
-                      )}
+                        {insight.estimated_reduction_percent != null && (
+                          <span className="text-sm text-muted-foreground">
+                            ~{insight.estimated_reduction_percent}% reduction
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      </ProFeatureGate>
     </div>
   );
 }

@@ -8,6 +8,10 @@ from app.models.emission_factor import EmissionFactor
 from app.models.emission_estimate import EmissionEstimate
 from app.models.emissions_summary import EmissionsSummary
 from app.models.report import Report
+from app.models.audit_log import AuditLog
+from app.models.idempotency_key import IdempotencyKey
+from app.models.email_verification_token import EmailVerificationToken
+from app.models.password_reset_token import PasswordResetToken
 
 __all__ = [
     "Base",
@@ -19,4 +23,8 @@ __all__ = [
     "EmissionEstimate",
     "EmissionsSummary",
     "Report",
+    "AuditLog",
+    "IdempotencyKey",
+    "EmailVerificationToken",
+    "PasswordResetToken",
 ]

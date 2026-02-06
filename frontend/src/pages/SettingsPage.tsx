@@ -7,6 +7,7 @@ import {
   updatePreferences,
   deleteCompanyData,
 } from "@/api/company";
+import { fetchOnboarding, updateOnboarding } from "@/api/onboarding";
 import {
   Card,
   CardContent,
@@ -32,6 +33,7 @@ const companySchema = z.object({
 export function SettingsPage() {
   const queryClient = useQueryClient();
   const { data: company, isLoading, error } = useQuery("company", fetchCompany);
+  const { data: onboarding } = useQuery("onboarding", fetchOnboarding);
 
   const [name, setName] = useState("");
   const [industry, setIndustry] = useState("");
@@ -41,6 +43,12 @@ export function SettingsPage() {
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [monthlySummaries, setMonthlySummaries] = useState(true);
   const [unitSystem, setUnitSystem] = useState("metric_tco2e");
+  const [originalProfile, setOriginalProfile] = useState<{
+    name: string;
+    industry: string;
+    hq_location: string;
+    employee_count: string;
+  } | null>(null);
 
   useEffect(() => {
     if (company) {
@@ -52,6 +60,12 @@ export function SettingsPage() {
       setEmailNotifications(company.email_notifications);
       setMonthlySummaries(company.monthly_summary_reports);
       setUnitSystem(company.unit_system);
+      setOriginalProfile({
+        name: company.name ?? "",
+        industry: company.industry ?? "",
+        hq_location: company.hq_location ?? "",
+        employee_count: company.employee_count?.toString() ?? "",
+      });
     }
   }, [company]);
 
@@ -65,9 +79,25 @@ export function SettingsPage() {
         reporting_year: reportingYear,
       }),
     {
-      onSuccess: () => {
+      onSuccess: async () => {
         queryClient.invalidateQueries("company");
         toast.success("Company updated");
+        const changed =
+          !originalProfile ||
+          originalProfile.name !== name ||
+          originalProfile.industry !== industry ||
+          originalProfile.hq_location !== hqLocation ||
+          originalProfile.employee_count !== employeeCount;
+        if (changed && onboarding?.state?.confirm_company_details) {
+          await updateOnboarding({ confirm_company_details: false });
+          queryClient.invalidateQueries("onboarding");
+        }
+        setOriginalProfile({
+          name,
+          industry,
+          hq_location: hqLocation,
+          employee_count: employeeCount,
+        });
       },
       onError: () => toast.error("Update failed"),
     }
@@ -96,6 +126,16 @@ export function SettingsPage() {
     },
     onError: () => toast.error("Delete failed"),
   });
+  const confirmCompanyMutation = useMutation(
+    () => updateOnboarding({ confirm_company_details: true }),
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries("onboarding");
+        toast.success("Company details confirmed");
+      },
+      onError: () => toast.error("Confirmation failed"),
+    }
+  );
 
   const handleSaveCompany = (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,6 +160,14 @@ export function SettingsPage() {
 
   if (error)
     return <p className="text-destructive">Failed to load settings.</p>;
+
+  const profileComplete =
+    Boolean(name.trim()) &&
+    Boolean(industry.trim()) &&
+    Boolean(hqLocation.trim()) &&
+    Number(employeeCount) > 0;
+  const companyConfirmed =
+    profileComplete && Boolean(onboarding?.state?.confirm_company_details);
 
   return (
     <div className="space-y-6">
@@ -178,13 +226,32 @@ export function SettingsPage() {
                   }
                 />
               </div>
-              <div className="sm:col-span-2">
+              <div className="sm:col-span-2 flex flex-wrap items-center gap-3">
                 <Button
                   type="submit"
                   isLoading={updateCompanyMutation.isLoading}
                 >
                   Save company
                 </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => confirmCompanyMutation.mutate()}
+                  disabled={!profileComplete || companyConfirmed}
+                  isLoading={confirmCompanyMutation.isLoading}
+                >
+                  {companyConfirmed
+                    ? "Company details confirmed"
+                    : "Confirm company details"}
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  This ensures your reports contain accurate company information.
+                </span>
+                {!profileComplete && (
+                  <span className="text-xs text-muted-foreground">
+                    Fill required fields to confirm.
+                  </span>
+                )}
               </div>
             </form>
           )}

@@ -7,6 +7,7 @@ class OnboardingState(BaseModel):
     upload_csv: bool = False
     add_manual_activity: bool = False
     create_report: bool = False
+    confirm_company_details: bool = False
 
 
 class OnboardingResponse(BaseModel):
@@ -19,3 +20,4 @@ class OnboardingUpdateRequest(BaseModel):
     upload_csv: bool | None = None
     add_manual_activity: bool | None = None
     create_report: bool | None = None
+    confirm_company_details: bool | None = None

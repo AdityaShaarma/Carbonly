@@ -27,7 +27,9 @@ from app.services.emissions import compute_estimates_for_company, refresh_emissi
 
 async def seed():
     settings = get_settings()
-    engine = create_async_engine(settings.database_url, echo=False)
+    if settings.env == "production":
+        raise RuntimeError("Refusing to seed data in production environment.")
+    engine = create_async_engine(settings.database_url_async, echo=False)
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
@@ -63,38 +65,43 @@ async def seed():
 
         result = await session.execute(select(User).where(User.email == "test@carbonly.com"))
         existing = result.scalar_one_or_none()
+
         if existing:
             print("Demo user already exists: test@carbonly.com / password123")
-            return
+            # Load company so we can re-seed activity data after TRUNCATE
+            company = await session.get(Company, existing.company_id)
+            if company is None:
+                raise RuntimeError("Demo user exists but company not found")
+        else:
+            company = Company(
+                name="Carbonly Demo Co",
+                industry="B2B SaaS",
+                employee_count=85,
+                hq_location="San Francisco, CA",
+                reporting_year=2025,
+                email_notifications=True,
+                monthly_summary_reports=True,
+                unit_system="metric_tco2e",
+                onboarding_state={
+                    "connect_aws": False,
+                    "upload_csv": False,
+                    "add_manual_activity": False,
+                    "create_report": False,
+                },
+            )
+            session.add(company)
+            await session.flush()
 
-        company = Company(
-            name="Carbonly Demo Co",
-            industry="B2B SaaS",
-            employee_count=85,
-            hq_location="San Francisco, CA",
-            reporting_year=2025,
-            email_notifications=True,
-            monthly_summary_reports=True,
-            unit_system="metric_tco2e",
-            onboarding_state={
-                "connect_aws": False,
-                "upload_csv": False,
-                "add_manual_activity": False,
-                "create_report": False,
-            },
-        )
-        session.add(company)
-        await session.flush()
+            user = User(
+                email="test@carbonly.com",
+                full_name="Demo User",
+                company_id=company.id,
+                is_active=True,
+                password_hash=get_password_hash("password123"),
+            )
+            session.add(user)
+            await session.flush()
 
-        user = User(
-            email="test@carbonly.com",
-            full_name="Demo User",
-            company_id=company.id,
-            is_active=True,
-            password_hash=get_password_hash("password123"),
-        )
-        session.add(user)
-        await session.flush()
 
         # Seed activity records across multiple months for charts
         year = 2025

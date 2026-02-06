@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: carbonly-backend
+    env: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash render_start.sh
+    autoDeploy: true
+    envVars:
+      - key: ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: ENABLE_DOCS
+        value: "false"
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      - key: CORS_ORIGINS
+        value: ""
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false

@@ -17,6 +17,7 @@ def _normalize_state(state: dict | None) -> OnboardingState:
         upload_csv=bool(state.get("upload_csv", False)),
         add_manual_activity=bool(state.get("add_manual_activity", False)),
         create_report=bool(state.get("create_report", False)),
+        confirm_company_details=bool(state.get("confirm_company_details", False)),
     )
 
 

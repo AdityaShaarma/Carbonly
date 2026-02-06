@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "react-query";
 import { Link } from "react-router-dom";
-import { fetchReports, createReport } from "@/api/reports";
+import { fetchReports, createReport, deleteReport } from "@/api/reports";
 import { useYearSelector } from "@/hooks/useYearSelector";
 import {
   Card,
@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
 import { Select } from "@/components/ui/Select";
 import toast from "react-hot-toast";
-import { formatKgToTons } from "@/utils/format";
+import { formatEmissions } from "@/utils/format";
 import { updateOnboarding } from "@/api/onboarding";
 
 export function ReportsPage() {
@@ -23,6 +23,7 @@ export function ReportsPage() {
   const { year, setYear, options } = useYearSelector();
   const [title, setTitle] = useState("");
   const [createYear, setCreateYear] = useState(year);
+  const [deleteError, setDeleteError] = useState("");
 
   const { data, isLoading, error } = useQuery(
     ["reports", year],
@@ -43,8 +44,25 @@ export function ReportsPage() {
       onError: () => toast.error("Failed to create report"),
     }
   );
+  const remove = useMutation((reportId: string) => deleteReport(reportId), {
+    onSuccess: () => {
+      setDeleteError("");
+      queryClient.invalidateQueries(["reports"]);
+    },
+    onError: (err: { response?: { data?: { detail?: string } } }) => {
+      setDeleteError(err.response?.data?.detail ?? "Failed to delete report.");
+    },
+  });
 
   const reports = data?.reports ?? [];
+
+  const statusBadge = (status: string) => {
+    const base = "inline-flex items-center rounded-full px-2 py-0.5 text-xs";
+    if (status === "published") {
+      return `${base} bg-emerald-100 text-emerald-700`;
+    }
+    return `${base} bg-muted text-muted-foreground`;
+  };
 
   return (
     <div className="space-y-6">
@@ -130,6 +148,9 @@ export function ReportsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {deleteError && (
+              <p className="mb-3 text-sm text-destructive">{deleteError}</p>
+            )}
             <ul className="divide-y divide-border">
               {reports.map((r) => (
                 <li
@@ -145,15 +166,34 @@ export function ReportsPage() {
                     </Link>
                     <p className="text-sm text-muted-foreground">
                       {r.company_name_snapshot ?? ""} ·{" "}
-                      {formatKgToTons(r.total_kg_co2e)} tCO₂e ·{" "}
-                      {new Date(r.created_at).toLocaleDateString()} · {r.status}
+                      {formatEmissions(r.total_kg_co2e)} ·{" "}
+                      {new Date(r.created_at).toLocaleDateString()}
                     </p>
                   </div>
-                  <Link to={`/reports/${r.id}`}>
-                    <Button variant="outline" size="sm">
-                      View
-                    </Button>
-                  </Link>
+                  <div className="flex items-center gap-3">
+                    <span className={statusBadge(r.status)}>{r.status}</span>
+                    {r.status === "draft" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-destructive border-destructive/30 hover:text-destructive"
+                        onClick={() => {
+                          if (!window.confirm("Delete this draft report?")) {
+                            return;
+                          }
+                          remove.mutate(r.id);
+                        }}
+                        disabled={remove.isLoading}
+                      >
+                        Delete
+                      </Button>
+                    )}
+                    <Link to={`/reports/${r.id}`}>
+                      <Button variant="outline" size="sm">
+                        View
+                      </Button>
+                    </Link>
+                  </div>
                 </li>
               ))}
             </ul>

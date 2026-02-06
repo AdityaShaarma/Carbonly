@@ -2,15 +2,17 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import CurrentCompany, CurrentUser, DbSession
+from app.auth import CurrentCompany, CurrentUser, DbSession, NonDemoUser
 from app.models.activity_record import ActivityRecord
 from app.models.data_source_connection import DataSourceConnection
 from app.models.emission_estimate import EmissionEstimate
 from app.models.emissions_summary import EmissionsSummary
 from app.models.report import Report
+from app.services.audit import log_audit_action
+from app.models.base import utc_now
 from app.schemas.company import (
     CompanyResponse,
     CompanyUpdateRequest,
@@ -36,6 +38,12 @@ async def get_company(
         email_notifications=company.email_notifications,
         monthly_summary_reports=company.monthly_summary_reports,
         unit_system=company.unit_system,
+        plan=company.plan,
+        billing_status=company.billing_status,
+        subscription_status=company.subscription_status,
+        current_period_end=company.current_period_end.isoformat()
+        if company.current_period_end
+        else None,
     )
 
 
@@ -70,6 +78,12 @@ async def update_company(
         email_notifications=company.email_notifications,
         monthly_summary_reports=company.monthly_summary_reports,
         unit_system=company.unit_system,
+        plan=company.plan,
+        billing_status=company.billing_status,
+        subscription_status=company.subscription_status,
+        current_period_end=company.current_period_end.isoformat()
+        if company.current_period_end
+        else None,
     )
 
 
@@ -100,6 +114,12 @@ async def update_preferences(
         email_notifications=company.email_notifications,
         monthly_summary_reports=company.monthly_summary_reports,
         unit_system=company.unit_system,
+        plan=company.plan,
+        billing_status=company.billing_status,
+        subscription_status=company.subscription_status,
+        current_period_end=company.current_period_end.isoformat()
+        if company.current_period_end
+        else None,
     )
 
 
@@ -107,6 +127,7 @@ async def update_preferences(
 async def delete_company_data(
     request: DeleteDataRequest,
     company: CurrentCompany = None,
+    user: NonDemoUser = None,
     db: DbSession = None,
 ):
     """Delete all company data (activities, estimates, summaries, reports). Requires confirmation flag."""
@@ -117,11 +138,23 @@ async def delete_company_data(
         )
 
     # Delete in order (respecting foreign keys)
-    await db.execute(delete(Report).where(Report.company_id == company.id))
+    await db.execute(
+        update(Report)
+        .where(Report.company_id == company.id, Report.deleted_at.is_(None))
+        .values(deleted_at=utc_now())
+    )
     await db.execute(delete(EmissionsSummary).where(EmissionsSummary.company_id == company.id))
     await db.execute(delete(EmissionEstimate).where(EmissionEstimate.company_id == company.id))
     await db.execute(delete(ActivityRecord).where(ActivityRecord.company_id == company.id))
     await db.execute(delete(DataSourceConnection).where(DataSourceConnection.company_id == company.id))
+    await log_audit_action(
+        db,
+        user_id=user.id,
+        company_id=company.id,
+        action="company_data_deleted",
+        entity_type="company",
+        entity_id=company.id,
+    )
     await db.commit()
 
     return {"status": "deleted", "message": "All company data has been deleted"}

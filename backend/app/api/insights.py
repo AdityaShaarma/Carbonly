@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.auth import CurrentCompany, DbSession
+from app.auth import PaidCompany, DbSession
 from app.schemas.insights import InsightResponse, InsightsResponse
 
 router = APIRouter(prefix="/api/insights", tags=["insights"])
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/insights", tags=["insights"])
 @router.get("", response_model=InsightsResponse)
 async def get_insights(
     year: Annotated[int, Query(description="Reporting year")] = 2025,
-    company: CurrentCompany = None,
+    company: PaidCompany = None,
     db: DbSession = None,
 ):
     """

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/utils/cn";
 import { OnboardingGate } from "@/components/routes/OnboardingGate";
+import { DEMO_MODE } from "@/config/env";
 
 const nav = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -69,9 +70,16 @@ export function Layout() {
       </aside>
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-14 border-b border-border bg-card flex items-center justify-between px-6">
-          <span className="text-sm text-muted-foreground truncate">
-            {company?.name}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground truncate">
+              {company?.name}
+            </span>
+            {DEMO_MODE && (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+                Demo
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-muted-foreground truncate max-w-[200px]">
               {user?.email}
