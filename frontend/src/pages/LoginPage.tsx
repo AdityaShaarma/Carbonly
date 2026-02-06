@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useMutation } from "react-query";
 import { z } from "zod";
@@ -34,14 +34,31 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  useEffect(() => {
+    const message = sessionStorage.getItem("auth_message");
+    if (message) {
+      toast.error(message);
+      sessionStorage.removeItem("auth_message");
+    }
+  }, []);
+
   const mutation = useMutation(() => login(email, password), {
     onSuccess: async () => {
       await refetchMe();
       toast.success("Logged in");
       navigate(from, { replace: true });
     },
-    onError: (err: { response?: { data?: { detail?: string } } }) => {
-      toast.error(err.response?.data?.detail ?? "Login failed");
+    onError: (err: { response?: { status?: number; data?: { detail?: string } } }) => {
+      const detail = err.response?.data?.detail ?? "";
+      if (detail.toLowerCase().includes("expired")) {
+        toast.error("Session expired — please log in again");
+        return;
+      }
+      if (err.response?.status === 404) {
+        toast.error("Account not found");
+        return;
+      }
+      toast.error("Invalid email or password");
     },
   });
 

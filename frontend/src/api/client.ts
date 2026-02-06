@@ -33,8 +33,17 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
-    if (error.response?.status === 401) {
+    const status = error.response?.status;
+    const detail =
+      (error.response?.data as { detail?: string } | undefined)?.detail ?? "";
+    const isAuthError =
+      status === 401 ||
+      (status === 402 && detail.toLowerCase().includes("not authenticated"));
+    if (isAuthError) {
       clearStoredToken();
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("auth_message", "Please log in again.");
+      }
       if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
         window.location.href = "/login";
       }

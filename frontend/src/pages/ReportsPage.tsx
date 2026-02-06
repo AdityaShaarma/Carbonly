@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "react-query";
 import { Link } from "react-router-dom";
 import { fetchReports, createReport, deleteReport } from "@/api/reports";
+import { fetchDashboard } from "@/api/dashboard";
 import { useYearSelector } from "@/hooks/useYearSelector";
 import {
   Card,
@@ -24,11 +25,10 @@ export function ReportsPage() {
   const [title, setTitle] = useState("");
   const [createYear, setCreateYear] = useState(year);
   const [deleteError, setDeleteError] = useState("");
+  const [createHint, setCreateHint] = useState("");
 
-  const { data, isLoading, error } = useQuery(
-    ["reports", year],
-    () => fetchReports(year),
-    { keepPreviousData: true }
+  const { data: dashboard } = useQuery(["dashboard", year], () =>
+    fetchDashboard(year)
   );
 
   const create = useMutation(
@@ -40,8 +40,10 @@ export function ReportsPage() {
         queryClient.invalidateQueries("onboarding");
         toast.success("Report created");
         setTitle("");
+        setCreateHint("");
       },
-      onError: () => toast.error("Failed to create report"),
+      onError: () =>
+        toast.error("We couldn’t create a report yet. Add data and try again."),
     }
   );
   const remove = useMutation((reportId: string) => deleteReport(reportId), {
@@ -50,11 +52,26 @@ export function ReportsPage() {
       queryClient.invalidateQueries(["reports"]);
     },
     onError: (err: { response?: { data?: { detail?: string } } }) => {
-      setDeleteError(err.response?.data?.detail ?? "Failed to delete report.");
+      setDeleteError(
+        err.response?.data?.detail ?? "We couldn’t delete that report. Try again."
+      );
     },
   });
 
+  const hasData =
+    (dashboard?.data_lineage?.manual_count ?? 0) +
+      (dashboard?.data_lineage?.estimated_count ?? 0) +
+      (dashboard?.data_lineage?.measured_count ?? 0) >
+      0 ||
+    (dashboard?.annual_totals?.total_co2e ?? 0) > 0;
+  const { data, isLoading, error } = useQuery(
+    ["reports", year],
+    () => fetchReports(year),
+    { keepPreviousData: true, enabled: hasData }
+  );
   const reports = data?.reports ?? [];
+  const errorStatus = (error as { response?: { status?: number } } | null)?.response?.status;
+  const showError = Boolean(error) && (!errorStatus || errorStatus >= 500);
 
   const statusBadge = (status: string) => {
     const base = "inline-flex items-center rounded-full px-2 py-0.5 text-xs";
@@ -116,16 +133,36 @@ export function ReportsPage() {
             </Select>
           </div>
           <Button
-            onClick={() => create.mutate()}
-            disabled={!title.trim() || create.isLoading}
+            onClick={() => {
+              if (!hasData) {
+                setCreateHint(
+                  "Reports are generated from your emissions data. Add data first."
+                );
+                return;
+              }
+              create.mutate();
+            }}
+            disabled={!title.trim() || create.isLoading || !hasData}
             isLoading={create.isLoading}
           >
             Create report
           </Button>
+          {createHint && (
+            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <span>{createHint}</span>
+          <Link to="/manual" className="text-primary hover:underline">
+                Add data
+              </Link>
+            </div>
+          )}
         </CardContent>
       </Card>
 
-      {error && <p className="text-destructive">Failed to load reports.</p>}
+      {showError && hasData && (
+        <p className="text-destructive">
+          We couldn’t load reports. Try again in a moment.
+        </p>
+      )}
 
       {isLoading ? (
         <div className="space-y-2">
@@ -136,7 +173,16 @@ export function ReportsPage() {
       ) : reports.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            No reports yet. Create one above.
+            {!hasData ? (
+              <div className="space-y-2">
+                <p>Reports are generated from your emissions data.</p>
+                <Link to="/manual" className="text-primary hover:underline">
+                  Add data
+                </Link>
+              </div>
+            ) : (
+              "No reports yet. Create one above."
+            )}
           </CardContent>
         </Card>
       ) : (

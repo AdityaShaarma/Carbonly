@@ -21,7 +21,7 @@ from argon2.exceptions import VerifyMismatchError, InvalidHashError
 
 settings = get_settings()
 _argon2 = PasswordHasher()
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 security_optional = HTTPBearer(auto_error=False)
 
 
@@ -51,7 +51,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
 
 
 async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
     """Dependency: get current authenticated user from JWT token."""
@@ -60,6 +60,8 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    if credentials is None:
+        raise credentials_exception
     try:
         token = credentials.credentials
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
@@ -139,13 +141,13 @@ async def require_paid_plan(
     if user.is_demo:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"error": {"code": "payment_required", "message": "Upgrade to export reports."}},
+            detail={"error": {"code": "payment_required", "message": "Pro plan required"}},
         )
     if company.plan in {"starter", "pro"} and company.billing_status in {"active", "trialing"}:
         return company
     raise HTTPException(
         status_code=status.HTTP_402_PAYMENT_REQUIRED,
-        detail={"error": {"code": "payment_required", "message": "Upgrade to export reports."}},
+        detail={"error": {"code": "payment_required", "message": "Pro plan required"}},
     )
 
 

@@ -1,5 +1,6 @@
 import { useQuery } from "react-query";
 import { fetchInsights } from "@/api/insights";
+import { fetchDashboard } from "@/api/dashboard";
 import { useYearSelector } from "@/hooks/useYearSelector";
 import {
   Card,
@@ -11,20 +12,38 @@ import {
 import { Select } from "@/components/ui/Select";
 import { cn } from "@/utils/cn";
 import { ProFeatureGate } from "@/components/billing/ProFeatureGate";
+import { Link } from "react-router-dom";
 
 export function InsightsPage() {
   const { year, setYear, options } = useYearSelector();
 
+  const { data: dashboard } = useQuery(["dashboard", year], () =>
+    fetchDashboard(year)
+  );
+
+  const hasData =
+    (dashboard?.data_lineage?.manual_count ?? 0) +
+      (dashboard?.data_lineage?.estimated_count ?? 0) +
+      (dashboard?.data_lineage?.measured_count ?? 0) >
+      0 ||
+    (dashboard?.annual_totals?.total_co2e ?? 0) > 0;
   const { data, isLoading, error } = useQuery(
     ["insights", year],
     () => fetchInsights(year),
-    { keepPreviousData: true }
+    { keepPreviousData: true, enabled: hasData }
   );
 
   const insights = data?.insights ?? [];
+  const errorStatus = (error as { response?: { status?: number } } | null)?.response?.status;
+  const showError = Boolean(error) && (!errorStatus || errorStatus >= 500);
 
-  if (error)
-    return <p className="text-destructive">Failed to load insights.</p>;
+  if (showError) {
+    return (
+      <p className="text-destructive">
+        We couldn’t load insights. Try again in a moment.
+      </p>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -55,7 +74,15 @@ export function InsightsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {isLoading ? (
+            {!hasData ? (
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>No emissions data yet</p>
+                <p>Add data to see insights about your carbon footprint</p>
+                <Link to="/manual" className="text-primary hover:underline">
+                  Add data
+                </Link>
+              </div>
+            ) : isLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3, 4].map((i) => (
                   <div key={i} className="h-20 animate-pulse rounded bg-muted" />

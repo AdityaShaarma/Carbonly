@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 @router.get("", response_model=ReportsListResponse)
 async def list_reports(
     year: Annotated[int | None, Query(description="Filter by reporting year")] = None,
-    company: PaidCompany = None,
+    company: CurrentCompany = None,
     db: DbSession = None,
 ):
     """List all reports for the company."""
@@ -70,7 +70,7 @@ async def list_reports(
 @router.post("", response_model=ReportDetailResponse)
 async def create_report(
     request: ReportCreateRequest,
-    company: PaidCompany = None,
+    company: CurrentCompany = None,
     user: NonDemoUser = None,
     db: DbSession = None,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
@@ -158,7 +158,7 @@ async def create_report(
 @router.get("/{report_id}", response_model=ReportDetailResponse)
 async def get_report(
     report_id: str,
-    company: PaidCompany = None,
+    company: CurrentCompany = None,
     db: DbSession = None,
 ):
     """Get report detail."""

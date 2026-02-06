@@ -31,9 +31,9 @@ export class ErrorBoundary extends React.Component<
       return (
         <div className="flex min-h-screen items-center justify-center bg-muted/30 p-6">
           <div className="max-w-md rounded-lg border border-border bg-card p-6 text-center">
-            <h1 className="text-xl font-semibold">Something went wrong</h1>
+            <h1 className="text-xl font-semibold">We couldn’t load this screen</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Please refresh the page or return to the dashboard.
+              Try refreshing the page or return to the dashboard.
             </p>
             <div className="mt-4 flex justify-center gap-2">
               <Button
