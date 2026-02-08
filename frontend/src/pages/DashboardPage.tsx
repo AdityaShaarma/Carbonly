@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useQuery } from "react-query";
 import {
   LineChart,
@@ -58,11 +59,41 @@ export function DashboardPage() {
   const quality = data?.data_quality;
   const lineage = data?.data_lineage;
   const trend = data?.monthly_trend ?? [];
+  const trendMetrics = useMemo(() => {
+    const monthsWithData = trend.filter(
+      (m) => (m.total ?? 0) > 0 || (m.scope_1 ?? 0) > 0 || (m.scope_2 ?? 0) > 0 || (m.scope_3 ?? 0) > 0
+    );
+    const maxValue = trend.reduce((max, m) => {
+      const candidates = [m.total ?? 0, m.scope_1 ?? 0, m.scope_2 ?? 0, m.scope_3 ?? 0];
+      return Math.max(max, ...candidates);
+    }, 0);
+    return {
+      monthsWithData: monthsWithData.length,
+      maxValue,
+      startMonth: monthsWithData[0]?.month,
+    };
+  }, [trend]);
+  const insufficientTrendData =
+    trendMetrics.monthsWithData < 2 || (totals?.total_co2e ?? 0) < 1;
+  const showKgAxis = trendMetrics.maxValue < 1000;
+  const yDomainMax = Math.max(1, trendMetrics.maxValue * 1.1);
+  const showScope1 = trend.some((m) => (m.scope_1 ?? 0) > 0);
+  const showScope2 = trend.some((m) => (m.scope_2 ?? 0) > 0);
+  const showScope3 = trend.some((m) => (m.scope_3 ?? 0) > 0);
+  const showTotal = trend.some((m) => (m.total ?? 0) > 0);
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold">
+            Generate procurement-ready carbon disclosures.
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Carbonly helps you respond to customer and regulatory carbon
+            requests using measured data or defensible estimates.
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <label className="text-sm text-muted-foreground">Year</label>
           <Select
@@ -302,69 +333,91 @@ export function DashboardPage() {
             </Card>
           )}
 
-          {trend.length > 0 ? (
+          {!insufficientTrendData ? (
             <Card>
               <CardHeader>
                 <CardTitle>Emissions Trend</CardTitle>
-                <CardDescription>Monthly breakdown by scope</CardDescription>
+                <CardDescription>
+                  Monthly breakdown by scope
+                </CardDescription>
               </CardHeader>
               <CardContent>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Data coverage: {trendMetrics.startMonth ?? "Jan"} {year} – Present
+                </p>
                 <ResponsiveContainer width="100%" height={300}>
                   <LineChart data={trend}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="month" />
                     <YAxis
-                      tickFormatter={(v) => `${formatKgToTons(v, 0)} tCO₂e`}
+                      domain={[0, yDomainMax]}
+                      tickFormatter={(v) =>
+                        showKgAxis
+                          ? `${formatNumber(v)} kg CO₂e`
+                          : `${formatKgToTons(v, 0)} tCO₂e`
+                      }
                     />
                     <Tooltip
                       formatter={(v: number) => [
-                        formatEmissions(v),
+                        showKgAxis ? `${formatNumber(v)} kg CO₂e` : formatEmissions(v),
                         "Emissions",
                       ]}
                     />
                     <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="scope_1"
-                      name="Scope 1"
-                      stroke="hsl(142 76% 22%)"
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="scope_2"
-                      name="Scope 2"
-                      stroke="hsl(200 80% 40%)"
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="scope_3"
-                      name="Scope 3"
-                      stroke="hsl(30 80% 45%)"
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="total"
-                      name="Total"
-                      stroke="hsl(0 0% 30%)"
-                      strokeWidth={2}
-                    />
+                    {showScope1 && (
+                      <Line
+                        type="monotone"
+                        dataKey="scope_1"
+                        name="Scope 1"
+                        stroke="hsl(142 76% 22%)"
+                      />
+                    )}
+                    {showScope2 && (
+                      <Line
+                        type="monotone"
+                        dataKey="scope_2"
+                        name="Scope 2"
+                        stroke="hsl(200 80% 40%)"
+                      />
+                    )}
+                    {showScope3 && (
+                      <Line
+                        type="monotone"
+                        dataKey="scope_3"
+                        name="Scope 3"
+                        stroke="hsl(30 80% 45%)"
+                      />
+                    )}
+                    {showTotal && (
+                      <Line
+                        type="monotone"
+                        dataKey="total"
+                        name="Total"
+                        stroke="hsl(0 0% 30%)"
+                        strokeWidth={2}
+                      />
+                    )}
                   </LineChart>
                 </ResponsiveContainer>
               </CardContent>
             </Card>
           ) : (
             <Card>
-              <CardContent className="flex flex-col items-center justify-center py-12">
-                <p className="text-muted-foreground mb-2">
-                  No emissions data yet.
+              <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+                <p className="text-muted-foreground mb-2 font-medium">
+                  Not enough data to show trends yet
                 </p>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Connect a cloud provider or upload a CSV to calculate your
-                  Scope 3 baseline.
+                  Add emissions data across multiple months to see trends over time.
                 </p>
-                <Link to="/integrations">
-                  <Button>Connect an integration</Button>
-                </Link>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <Link to="/manual">
+                    <Button variant="outline">Add manual data</Button>
+                  </Link>
+                  <Link to="/integrations">
+                    <Button>Sync integrations</Button>
+                  </Link>
+                </div>
               </CardContent>
             </Card>
           )}

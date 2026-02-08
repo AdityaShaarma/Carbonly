@@ -79,6 +79,11 @@ async def create_report(
     from app.services.emissions import compute_estimates_for_company
 
     endpoint = "POST /api/reports"
+    if request.reporting_year > datetime.now().year:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot create a disclosure report for a future year.",
+        )
     if idempotency_key:
         existing = await get_idempotency_record(
             db, company_id=company.id, endpoint=endpoint, key=idempotency_key

@@ -30,18 +30,22 @@ export async function deleteReport(reportId: string): Promise<{ status: string }
   return data;
 }
 
-export async function openReportPdf(reportId: string, reportingYear: number): Promise<void> {
-  const base = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
-  const token = localStorage.getItem("carbonly_token");
-  const res = await fetch(`${base}/api/reports/${reportId}/pdf`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+export async function openReportPdf(
+  reportId: string,
+  reportingYear: number,
+  reportTitle?: string
+): Promise<void> {
+  const { data } = await api.get<Blob>(`/api/reports/${reportId}/pdf`, {
+    responseType: "blob",
   });
-  if (!res.ok) throw new Error("Failed to load PDF");
-  const blob = await res.blob();
+  const blob = data;
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `carbonly-report-${reportingYear}.pdf`;
+  const safeTitle = reportTitle
+    ? reportTitle.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-")
+    : `carbonly-report-${reportingYear}`;
+  link.download = `${safeTitle}.pdf`;
   document.body.appendChild(link);
   link.click();
   link.remove();

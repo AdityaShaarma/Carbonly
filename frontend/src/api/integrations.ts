@@ -16,6 +16,11 @@ export async function estimateProvider(provider: string): Promise<{ status: stri
   return data as { status: string; activity_created?: boolean };
 }
 
+export async function disconnectProvider(provider: string): Promise<{ status: string }> {
+  const { data } = await api.post(`/api/integrations/${provider}/disconnect`);
+  return data as { status: string };
+}
+
 export interface ManualActivityPayload {
   scope: number;
   scope_3_category?: string | null;

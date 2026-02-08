@@ -62,6 +62,8 @@ export function ManualDataPage() {
     {
       onSuccess: async () => {
         queryClient.invalidateQueries(["dashboard", year]);
+        queryClient.invalidateQueries(["insights", year]);
+        queryClient.invalidateQueries(["reports", year]);
         await updateOnboarding({ add_manual_activity: true });
         queryClient.invalidateQueries("onboarding");
         toast.success("Activity created");
@@ -87,6 +89,8 @@ export function ManualDataPage() {
       onSuccess: async (data) => {
         setUploadResult(data);
         queryClient.invalidateQueries(["dashboard", year]);
+        queryClient.invalidateQueries(["insights", year]);
+        queryClient.invalidateQueries(["reports", year]);
         if (data.inserted > 0) {
           await updateOnboarding({ upload_csv: true });
           queryClient.invalidateQueries("onboarding");

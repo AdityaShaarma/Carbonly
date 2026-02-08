@@ -66,7 +66,7 @@ export function ReportDetailPage() {
     if (isDownloading) return;
     setIsDownloading(true);
     try {
-      await openReportPdf(reportId!, report.reporting_year);
+      await openReportPdf(reportId!, report.reporting_year, report.title);
       sessionStorage.setItem("carbonly_pdf_downloaded", "true");
       toast.success("PDF downloaded");
     } catch (err) {

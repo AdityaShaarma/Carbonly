@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "react-query";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/Button";
@@ -12,20 +13,33 @@ import toast from "react-hot-toast";
 
 export function OnboardingPage() {
   const queryClient = useQueryClient();
-  const { user, company } = useAuth();
+  const { user, company, refetchMe } = useAuth();
   const { year } = useYearSelector();
   const { data: reports } = useQuery(["reports", year], () => fetchReports(year));
   const { data: onboarding } = useQuery("onboarding", fetchOnboarding);
+  useEffect(() => {
+    refetchMe();
+  }, [refetchMe]);
 
   const verifyEmail = useMutation(() => requestEmailVerification(user?.email), {
-    onSuccess: () => toast.success("Verification email sent"),
+    onSuccess: () => {
+      toast.success("Verification email sent");
+      queryClient.invalidateQueries("onboarding");
+      queryClient.invalidateQueries(["dashboard", year]);
+    },
     onError: () => toast.error("Couldn’t send verification email"),
   });
   const confirmCompany = useMutation(
     () => updateOnboarding({ confirm_company_details: true }),
     {
       onSuccess: () => {
+        queryClient.setQueryData("onboarding", (prev: any) => ({
+          ...prev,
+          state: { ...(prev?.state ?? {}), confirm_company_details: true },
+        }));
         queryClient.invalidateQueries("onboarding");
+        queryClient.invalidateQueries(["dashboard", year]);
+        refetchMe();
         toast.success("Company details confirmed");
       },
       onError: () => toast.error("Couldn’t confirm company details"),
@@ -34,6 +48,8 @@ export function OnboardingPage() {
   const loadSample = useMutation(() => syncProvider("aws"), {
     onSuccess: () => {
       queryClient.invalidateQueries("integrations");
+      queryClient.invalidateQueries(["dashboard", year]);
+      queryClient.invalidateQueries(["reports", year]);
       toast.success("Sample data loaded");
     },
     onError: () => toast.error("Sample data couldn’t load"),
@@ -143,8 +159,10 @@ export function OnboardingPage() {
           Create your first carbon report in minutes
         </h1>
         <p className="text-sm text-muted-foreground">
-          Add data once. Carbonly calculates emissions and generates a shareable
-          report.
+          Customers and regulators increasingly ask for carbon disclosures.
+          Carbonly helps you produce procurement-ready carbon disclosures in
+          minutes, using measured data or defensible estimates—no consultants
+          required.
         </p>
         <div className="flex flex-wrap items-center gap-3">
           <Link to="/integrations">

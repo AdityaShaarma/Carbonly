@@ -8,18 +8,29 @@ export const api = axios.create({
   withCredentials: true,
 });
 
-const TOKEN_KEY = "carbonly_token";
+const TOKEN_KEY = "access_token";
+const LEGACY_TOKEN_KEY = "carbonly_token";
 
 export function getStoredToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) return token;
+  const legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
+  if (legacy) {
+    localStorage.setItem(TOKEN_KEY, legacy);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+    return legacy;
+  }
+  return null;
 }
 
 export function setStoredToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token);
+  localStorage.removeItem(LEGACY_TOKEN_KEY);
 }
 
 export function clearStoredToken(): void {
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(LEGACY_TOKEN_KEY);
 }
 
 api.interceptors.request.use((config) => {
@@ -36,13 +47,19 @@ api.interceptors.response.use(
     const status = error.response?.status;
     const detail =
       (error.response?.data as { detail?: string } | undefined)?.detail ?? "";
-    const isAuthError =
-      status === 401 ||
-      (status === 402 && detail.toLowerCase().includes("not authenticated"));
-    if (isAuthError) {
+    if (status === 401) {
+      if (import.meta.env.DEV) {
+        console.debug("[auth] clearing token on 401", {
+          status,
+          detail,
+        });
+      }
       clearStoredToken();
       if (typeof window !== "undefined") {
-        sessionStorage.setItem("auth_message", "Please log in again.");
+        sessionStorage.setItem(
+          "auth_message",
+          "Your session expired. Please log in again."
+        );
       }
       if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
         window.location.href = "/login";

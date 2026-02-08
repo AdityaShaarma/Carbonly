@@ -1,18 +1,25 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-
-const CURRENT_YEAR = new Date().getFullYear();
-const YEARS = Array.from({ length: 6 }, (_, i) => CURRENT_YEAR - 2 + i);
+import { getReportYears } from "@/utils/years";
 
 export function useYearSelector() {
   const { company } = useAuth();
-  const defaultYear = company?.reporting_year ?? CURRENT_YEAR;
+  const currentYear = new Date().getFullYear();
+  const defaultYear = Math.min(company?.reporting_year ?? currentYear, currentYear);
   const [year, setYear] = useState(defaultYear);
 
   const options = useMemo(() => {
-    const set = new Set([...YEARS, defaultYear].sort((a, b) => b - a));
-    return Array.from(set);
-  }, [defaultYear]);
+    const years = getReportYears(currentYear, 9);
+    return years.includes(defaultYear)
+      ? years
+      : [defaultYear, ...years].sort((a, b) => b - a);
+  }, [currentYear, defaultYear]);
+
+  useEffect(() => {
+    if (!options.includes(year)) {
+      setYear(options[0]);
+    }
+  }, [options, year]);
 
   return { year, setYear, options };
 }

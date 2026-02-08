@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useMutation } from "react-query";
 import { z } from "zod";
-import { demoLogin, login } from "@/api/auth";
+import { login } from "@/api/auth";
 import { useAuth } from "@/contexts/AuthContext";
+import { getStoredToken } from "@/api/client";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
@@ -33,6 +34,13 @@ export function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const requestIdRef = useRef(0);
+  const DEMO_EMAIL = "test@carbonly.com";
+  const DEMO_PASSWORD = "password123";
 
   useEffect(() => {
     const message = sessionStorage.getItem("auth_message");
@@ -41,44 +49,90 @@ export function LoginPage() {
       sessionStorage.removeItem("auth_message");
     }
   }, []);
+  useEffect(() => {
+    if (!cooldownUntil) return;
+    const interval = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [cooldownUntil]);
 
-  const mutation = useMutation(() => login(email, password), {
-    onSuccess: async () => {
+  const mutation = useMutation((vars: { email: string; password: string }) =>
+    login(vars.email, vars.password)
+  );
+
+  const isDev = Boolean((import.meta as { env?: { DEV?: boolean } }).env?.DEV);
+  const runLogin = async (loginEmail: string, loginPassword: string) => {
+    if (isSubmitting) return;
+    if (cooldownUntil && Date.now() < cooldownUntil) return;
+    setErrorMessage(null);
+    const result = schema.safeParse({
+      email: loginEmail,
+      password: loginPassword,
+    });
+    if (!result.success) {
+      const message = result.error.errors[0].message;
+      setErrorMessage(message);
+      toast.error(message);
+      return;
+    }
+    const requestId = ++requestIdRef.current;
+    setIsSubmitting(true);
+    try {
+      await mutation.mutateAsync({
+        email: loginEmail,
+        password: loginPassword,
+      });
+      if (requestId !== requestIdRef.current) return;
+      if (isDev) {
+        const token = getStoredToken();
+        console.debug("[auth] login success token saved", {
+          hasToken: Boolean(token),
+          tokenLength: token?.length ?? 0,
+        });
+      }
+      if (isDev) {
+        console.debug("[auth] before /me", {
+          hasAuthHeader: Boolean(getStoredToken()),
+        });
+      }
       await refetchMe();
       toast.success("Logged in");
       navigate(from, { replace: true });
-    },
-    onError: (err: { response?: { status?: number; data?: { detail?: string } } }) => {
-      const detail = err.response?.data?.detail ?? "";
-      if (detail.toLowerCase().includes("expired")) {
-        toast.error("Session expired — please log in again");
-        return;
+    } catch (err) {
+      if (requestId !== requestIdRef.current) return;
+      const status = (err as { response?: { status?: number } })?.response
+        ?.status;
+      if (status === 401) {
+        const message = "Invalid email or password.";
+        setErrorMessage(message);
+        toast.error(message);
+      } else if (status === 429) {
+        const message =
+          "Too many attempts. Please wait 30 seconds and try again.";
+        setErrorMessage(message);
+        toast.error(message);
+        setCooldownUntil(Date.now() + 30_000);
+      } else if (status === 404) {
+        const message = "Account not found";
+        setErrorMessage(message);
+        toast.error(message);
+      } else {
+        const message = "We couldn't log you in. Try again.";
+        setErrorMessage(message);
+        toast.error(message);
       }
-      if (err.response?.status === 404) {
-        toast.error("Account not found");
-        return;
+    } finally {
+      if (requestId === requestIdRef.current) {
+        setIsSubmitting(false);
       }
-      toast.error("Invalid email or password");
-    },
-  });
-
-  const demo = useMutation(() => demoLogin(), {
-    onSuccess: async () => {
-      await refetchMe();
-      toast.success("Demo mode enabled");
-      navigate(from, { replace: true });
-    },
-    onError: () => toast.error("Demo login failed"),
-  });
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const result = schema.safeParse({ email, password });
-    if (!result.success) {
-      toast.error(result.error.errors[0].message);
-      return;
     }
-    mutation.mutate();
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await runLogin(email, password);
   };
 
   return (
@@ -89,7 +143,12 @@ export function LoginPage() {
           <CardDescription>Sign in to your account</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form
+            id="login-form"
+            onSubmit={handleSubmit}
+            className="space-y-4"
+            noValidate
+          >
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -97,7 +156,10 @@ export function LoginPage() {
                 type="email"
                 placeholder="you@company.com"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (errorMessage) setErrorMessage(null);
+                }}
                 autoComplete="email"
               />
             </div>
@@ -107,17 +169,32 @@ export function LoginPage() {
                 id="password"
                 type="password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (errorMessage) setErrorMessage(null);
+                }}
                 autoComplete="current-password"
               />
             </div>
             <Button
               type="submit"
+              form="login-form"
               className="w-full"
-              isLoading={mutation.isLoading}
+              isLoading={isSubmitting}
+              disabled={
+                isSubmitting || (cooldownUntil ? nowMs < cooldownUntil : false)
+              }
             >
               Sign in
             </Button>
+            {cooldownUntil && nowMs < cooldownUntil && (
+              <p className="text-xs text-muted-foreground">
+                Try again in {Math.ceil((cooldownUntil - nowMs) / 1000)}s
+              </p>
+            )}
+            {errorMessage && (
+              <p className="text-sm text-destructive">{errorMessage}</p>
+            )}
           </form>
           <div className="mt-3 flex items-center justify-between text-sm">
             <Link
@@ -134,8 +211,12 @@ export function LoginPage() {
             <Button
               className="mt-4 w-full"
               variant="outline"
-              onClick={() => demo.mutate()}
-              isLoading={demo.isLoading}
+              onClick={async () => {
+                setEmail(DEMO_EMAIL);
+                setPassword(DEMO_PASSWORD);
+                await runLogin(DEMO_EMAIL, DEMO_PASSWORD);
+              }}
+              isLoading={isSubmitting}
             >
               Try Demo
             </Button>

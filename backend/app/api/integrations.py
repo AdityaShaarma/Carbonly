@@ -6,12 +6,13 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Header
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import CurrentCompany, CurrentUser, DbSession, NonDemoUser
 from app.models.activity_record import ActivityRecord
 from app.models.data_source_connection import DataSourceConnection
+from app.models.emission_estimate import EmissionEstimate
 from app.schemas.integrations import (
     CsvUploadResponse,
     IntegrationResponse,
@@ -212,6 +213,50 @@ async def estimate_integration(
         await db.commit()
 
     return response_payload
+
+
+@router.post("/{provider}/disconnect")
+async def disconnect_integration(
+    provider: str,
+    company: CurrentCompany = None,
+    user: NonDemoUser = None,
+    db: DbSession = None,
+):
+    """
+    Disconnect a provider and remove its activity data.
+    """
+    conn = await get_connection(db, company_id=company.id, provider=provider)
+    if conn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integration not found")
+
+    activity_ids_subquery = select(ActivityRecord.id).where(
+        ActivityRecord.data_source_connection_id == conn.id
+    )
+    await db.execute(
+        delete(EmissionEstimate).where(
+            EmissionEstimate.activity_record_id.in_(activity_ids_subquery)
+        )
+    )
+    await db.execute(
+        delete(ActivityRecord).where(ActivityRecord.data_source_connection_id == conn.id)
+    )
+    conn.status = "not_connected"
+    conn.last_synced_at = None
+    await db.flush()
+
+    await compute_estimates_for_company(db, company.id, replace_existing=True)
+    await refresh_emissions_summaries(db, company.id, company.reporting_year)
+    await log_audit_action(
+        db,
+        user_id=user.id,
+        company_id=company.id,
+        action="integration_disconnected",
+        entity_type="data_source_connection",
+        entity_id=conn.id,
+    )
+    await db.commit()
+
+    return {"status": "disconnected"}
 
 
 @router.post("/manual/activity")
